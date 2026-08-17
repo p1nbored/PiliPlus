@@ -31,12 +31,19 @@ TextureView 做不到。`cnctem/PiliPlusX` 的 `hdr` 分支正是这样修 Andro
 改动分布在四层，本地布局如下：
 
 ```
-E:\project\PiliPlus                                应用本体（分支 feat/ohos-hdr）
-E:\project\PiliPlus-hdr-deps\media-kit             分支 feat-ohos-hdr
-E:\project\PiliPlus-hdr-deps\mpv                   分支 feat-ohos-hdr
-E:\project\PiliPlus-hdr-deps\libmpv-ohos-build     分支 feat-ohos-hdr
-E:\project\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用脚本
+C:\Programs\PiliPlus                                应用本体（分支 feat/ohos-hdr）
+C:\Programs\PiliPlus-hdr-deps\media-kit             分支 feat-ohos-hdr
+C:\Programs\PiliPlus-hdr-deps\mpv                   分支 feat-ohos-hdr
+C:\Programs\PiliPlus-hdr-deps\libmpv-ohos-build     分支 feat-ohos-hdr
+C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用脚本
 ```
+
+> 两个目录必须保持同级：`pubspec.yaml` 的 `dependency_overrides` 用的是
+> `../PiliPlus-hdr-deps/...` 相对路径。
+>
+> **不要放在 exFAT 分区上。** ohpm 的 `oh_modules` 完全依赖符号链接，exFAT
+> 不支持，`ohpm install` 会以 `00625004 SymLink Dir Failed` / `EBUSY` 失败，
+> 开发者模式和管理员权限都救不了。必须放在 NTFS 分区。
 
 ### 1. mpv（`feat-ohos-hdr`）
 
@@ -77,50 +84,100 @@ E:\project\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用脚
 
 ## 构建
 
-### 第一步：给 Flutter 引擎打补丁（必须）
+### 第一步：安装鸿蒙版 Flutter SDK
+
+```powershell
+git clone -b oh-3.41.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git C:\flutter
+```
+
+### 第二步：配置环境变量
+
+变量名取自 flutter_tools 的 `ohos/ohos_sdk.dart` 与 `hvigor_utils.dart`
+（`HOS_SDK_HOME` / `DEVECO_SDK_HOME` / `NODE_HOME`）：
+
+```powershell
+$deveco = "C:\Program Files\Huawei\DevEco Studio"
+[Environment]::SetEnvironmentVariable("HOS_SDK_HOME",    "$deveco\sdk", "User")
+[Environment]::SetEnvironmentVariable("DEVECO_SDK_HOME", "$deveco\sdk", "User")
+[Environment]::SetEnvironmentVariable("NODE_HOME",       "$deveco\tools\node", "User")
+$p = [Environment]::GetEnvironmentVariable("PATH","User")
+[Environment]::SetEnvironmentVariable("PATH",
+  "$p;C:\flutter\bin;$deveco\tools\ohpm\bin;$deveco\tools\hvigor\bin;$deveco\tools\node;$deveco\sdk\default\openharmony\toolchains","User")
+```
+
+重开终端后用 `flutter doctor -v`、`flutter devices` 确认。
+
+### 第三步：给 Flutter 引擎打补丁（必须）
 
 预编译引擎里 hybrid composition 是空实现，不打补丁平台视图不会显示。
-HAR 内是未混淆的 ArkTS 源码，解包打补丁再打包即可，不需要编译引擎：
+HAR 内是未混淆的 ArkTS 源码，解包打补丁再打包即可，不需要编译引擎。
+在 Git Bash 里执行：
 
 ```bash
-cd PiliPlus-hdr-deps/flutter-ohos-engine
-./apply-engine-patch.sh /path/to/flutter          # 还原用 --revert
+cd /c/Programs/PiliPlus-hdr-deps/flutter-ohos-engine
+./apply-engine-patch.sh /c/flutter          # 还原用 --revert
 ```
 
 脚本会自动备份 `*.har.orig`，可重复执行。细节见该目录下的 README。
 
-### 第二步：重新编译 libmpv（必须）
+### 第四步：重新编译 libmpv（必须）
 
 应用默认下载的是预编译 libmpv，**不含上面的 mpv 补丁**，必须自己编译一次。
-`build.sh` 只支持 Linux / macOS，Windows 下请用 WSL 或 Linux 机器：
+`build.sh` 只支持 Linux / macOS，Windows 下用 WSL：
 
 ```bash
-cd libmpv-ohos-build
+wsl -d Ubuntu
+```
+
+```bash
+sudo apt update && sudo apt install -y git wget curl build-essential meson ninja-build \
+     python3 python3-pip pkg-config unzip cmake
+
+git clone https://github.com/cnoim/libmpv-ohos-build.git ~/libmpv-ohos-build
+cd ~/libmpv-ohos-build
+git remote add local /mnt/c/Programs/PiliPlus-hdr-deps/libmpv-ohos-build && git fetch local
+git checkout -B feat-ohos-hdr local/feat-ohos-hdr
+
 # 指向本地打过补丁的 mpv
-export MPV_REPO=/path/to/PiliPlus-hdr-deps/mpv
+export MPV_REPO=/mnt/c/Programs/PiliPlus-hdr-deps/mpv
 export MPV_REF=feat-ohos-hdr
-./download.sh
-./patch.sh
-./build.sh
+./download.sh && ./patch.sh && ./build.sh    # 会拉取数 GB 的 SDK，耗时 1~3 小时
 ```
 
-产物是 arm64-v8a 的 `libmpv.so`。把它放到：
+产物是 arm64-v8a 的 `libmpv.so`（用 `find ~/libmpv-ohos-build -name libmpv.so`
+确认具体路径），复制到：
 
-```
-PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/libs/arm64-v8a/libmpv.so
+```bash
+mkdir -p /mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/libs/arm64-v8a
+cp <找到的 libmpv.so> \
+   /mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/libs/arm64-v8a/
 ```
 
 该目录非空时 CMake 会跳过下载，直接使用这个 so。
 
-### 第三步：编译应用
+### 第五步：配置签名
 
-```bash
-cd PiliPlus
+`ohos/build-profile.json5` 里 `signingConfigs` 目前是空的，未签名的 HAP 无法安装。
+用 DevEco Studio 打开 `C:\Programs\PiliPlus\ohos`，登录华为开发者账号并连接设备，
+**File → Project Structure → Signing Configs → 勾选自动生成签名**。
+调试证书同时绑定 bundleName（`com.example.piliplus`）与设备 UDID，只能交互式生成。
+
+### 第六步：编译应用
+
+```powershell
+cd C:\Programs\PiliPlus
+dart .vscode\build_env.dart          # 生成 .vscode\env.json
 flutter pub get
-flutter build hap --release   # 或用 VSCode 的 build_hap 任务
+flutter build hap --release --dart-define-from-file=.vscode/env.json
 ```
 
-`pubspec.yaml` 的 `dependency_overrides` 已指向本地 media-kit fork。
+产物在 `ohos\entry\build\default\outputs\default\`。安装：
+
+```powershell
+hdc install -r .\ohos\entry\build\default\outputs\default\entry-default-signed.hap
+```
+
+`pubspec.yaml` 的 `dependency_overrides` 已指向同级的 media-kit fork。
 如果把补丁推到了自己的仓库，把那几项改回 `git:` 形式即可。
 
 ## 验证 HDR 是否真的生效
