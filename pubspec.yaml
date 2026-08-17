@@ -308,11 +308,14 @@ dependency_overrides:
   path: ^1.9.1
   mime: ^2.0.0
   rxdart: ^0.28.0
+  # HDR 补丁位于本地 fork（见 docs/HDR.md）。若已将补丁推到自己的仓库，
+  # 把下面几项换回 git: 形式并指向该仓库即可。
   media_kit:
-    git:
-      url: https://github.com/cnoim/media-kit.git
-      ref: feat-ohos
-      path: ./media_kit
+    path: ../PiliPlus-hdr-deps/media-kit/media_kit
+  media_kit_video:
+    path: ../PiliPlus-hdr-deps/media-kit/media_kit_video
+  media_kit_libs_video:
+    path: ../PiliPlus-hdr-deps/media-kit/libs/universal/media_kit_libs_video
   media_kit_libs_linux:
     git:
       url: https://github.com/cnoim/media-kit.git
@@ -329,10 +332,7 @@ dependency_overrides:
       ref: feat-ohos
       path: ./libs/macos/media_kit_libs_macos_video
   media_kit_libs_ohos:
-    git:
-      url: https://github.com/cnoim/media-kit.git
-      ref: feat-ohos
-      path: ./libs/ohos/media_kit_libs_ohos
+    path: ../PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos
   # media_kit_libs_android_video:
   #   git:
   #     url: https://github.com/cnoim/media-kit.git

@@ -14,6 +14,7 @@ import 'package:PiliPlus/media_kit_adapt/media_kit_adapt.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models/common/audio_normalization.dart';
 import 'package:PiliPlus/models/common/super_resolution_type.dart';
+import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/user/danmaku_rule.dart';
 import 'package:PiliPlus/models/video/play/url.dart';
@@ -409,6 +410,39 @@ class PlPlayerController with BlockConfigMixin {
   bool enableHeart = true;
   late final String? hwdec = Pref.enableHA ? Pref.hardwareDecoding : null;
 
+  late final bool enableHDR = Pref.enableHDR;
+
+  /// 当前播放源的画质，用于判断是否为 HDR 片源。由 [setDataSource] 传入。
+  VideoQuality? _hdrQuality;
+
+  static final bool _isOhos = Platform.operatingSystem == 'ohos';
+
+  bool get _isHDRPlayback => enableHDR && (_hdrQuality?.isHDR ?? false);
+
+  /// 鸿蒙上 HDR 必须走平台视图（XComponent）渲染。
+  ///
+  /// Flutter 纹理会把视频重采样进 Flutter 自己的 SDR 合成层，libmpv 挂在
+  /// NativeWindow 上的色域与 HDR 元数据在这一步就丢了，系统因此不会进入 HDR
+  /// 模式（没有峰值亮度，PQ 画面被按 sRGB 显示所以颜色也不对）。
+  bool get usePlatformView => _isOhos && _isHDRPlayback && Pref.hdrPlatformView;
+
+  /// 当前 VideoController 实际使用的渲染路径，用于判断是否需要重建播放器。
+  bool _usesPlatformView = false;
+
+  /// 传给 mpv 的 `--ohos-hdr-mode`。
+  ///
+  /// 杜比视界在鸿蒙上没有原生信令，libplacebo 已经应用了 DV 的 RPU，因此这里
+  /// 只需把它按 HDR Vivid 上报即可。
+  String? get ohosHdrMode {
+    if (!_isOhos || !_isHDRPlayback) {
+      return null;
+    }
+    if (_hdrQuality!.isDolbyVision && Pref.hdrDolbyVisionAsVivid) {
+      return 'vivid';
+    }
+    return 'auto';
+  }
+
   late final progressType = Pref.btmProgressBehavior;
   late final enableQuickDouble = Pref.enableQuickDouble;
   late final fullScreenGestureReverse = Pref.fullScreenGestureReverse;
@@ -668,6 +702,8 @@ class PlPlayerController with BlockConfigMixin {
     VoidCallback? onInit,
     Volume? volume,
     bool autoFullScreenFlag = false,
+    // 当前片源画质，用于判断是否需要按 HDR 输出
+    VideoQuality? quality,
   }) {
     final previous = _setDataSourceQueue;
     final run = () async {
@@ -698,6 +734,7 @@ class PlPlayerController with BlockConfigMixin {
         onInit: onInit,
         volume: volume,
         autoFullScreenFlag: autoFullScreenFlag,
+        quality: quality,
       );
     }();
     _setDataSourceQueue = run;
@@ -731,6 +768,8 @@ class PlPlayerController with BlockConfigMixin {
     VoidCallback? onInit,
     Volume? volume,
     bool autoFullScreenFlag = false,
+    // 当前片源画质，用于判断是否需要按 HDR 输出
+    VideoQuality? quality,
   }) async {
     try {
       _processing = true;
@@ -752,6 +791,9 @@ class PlPlayerController with BlockConfigMixin {
       _epid = epid;
       _seasonId = seasonId;
       _pgcType = pgcType;
+      // 必须在创建 VideoController 之前赋值：输出方式（平台视图 / HDR 信令）
+      // 在播放器初始化时就要确定。
+      _hdrQuality = quality;
       if (!isLive && bvid != null && cid != null) {
         HarmonyChannel.holdContinuation(this);
       } else {
@@ -893,6 +935,8 @@ class PlPlayerController with BlockConfigMixin {
         enableHardwareAcceleration: hwdec != null,
         androidAttachSurfaceAfterVideoParameters: false,
         hwdec: hwdec,
+        usePlatformView: usePlatformView,
+        ohosHdrMode: ohosHdrMode,
       ),
     );
     // await player.setAudioTrack(.auto());
@@ -920,7 +964,19 @@ class PlPlayerController with BlockConfigMixin {
 
     var player = _videoPlayerController;
 
+    // 渲染路径（平台视图 / 纹理）在 VideoController 创建时就固定了，因此在
+    // HDR 与非 HDR 档位之间切换时必须重建播放器，否则切到 HDR 片源后仍然停留
+    // 在纹理路径上，HDR 依旧不会触发。
+    if (player != null && _usesPlatformView != usePlatformView) {
+      _removeListeners();
+      await player.dispose();
+      player = null;
+      _videoPlayerController = null;
+      _videoController = null;
+    }
+
     if (player == null) {
+      _usesPlatformView = usePlatformView;
       player = await _initPlayer();
       if (_playerCount == 0) {
         _removeListeners();

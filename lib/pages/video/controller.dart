@@ -768,6 +768,7 @@ class VideoDetailController extends GetxController
       height: firstVideo.height,
       volume: volume,
       autoFullScreenFlag: autoFullScreenFlag,
+      quality: currentVideoQa.value,
     );
 
     if (isClosed) return;

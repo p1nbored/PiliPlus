@@ -23,4 +23,12 @@ enum VideoQuality {
   static final _codeMap = {for (final i in values) i.code: i};
 
   static VideoQuality fromCode(int code) => _codeMap[code]!;
+
+  /// Whether this quality carries an HDR signal, and therefore needs the
+  /// player configured for HDR output.
+  bool get isHDR => this == hdr || this == hdrVivid || this == dolbyVision;
+
+  /// Whether this quality is Dolby Vision, which HarmonyOS cannot signal
+  /// natively and is mapped onto HDR Vivid instead.
+  bool get isDolbyVision => this == dolbyVision;
 }

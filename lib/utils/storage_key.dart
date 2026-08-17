@@ -24,6 +24,10 @@ abstract final class SettingBoxKey {
       bufferSize = 'bufferSize',
       bufferSec = 'bufferSec',
       hardwareDecoding = 'hardwareDecoding',
+      // HDR 输出（鸿蒙）
+      enableHDR = 'enableHDR',
+      hdrPlatformView = 'hdrPlatformView',
+      hdrDolbyVisionAsVivid = 'hdrDolbyVisionAsVivid',
       videoSync = 'videoSync',
       autosync = 'autosync',
       p1080 = 'p1080',
