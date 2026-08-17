@@ -2158,7 +2158,11 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                             visible: false,
                           ),
                       controller: plPlayerController.videoController!,
-                      fill: widget.fill,
+                      // 平台视图渲染时视频由系统合成在 Flutter 表面之下，
+                      // 这里必须保持透明，否则会把视频整个盖住。
+                      fill: plPlayerController.usePlatformView
+                          ? Colors.transparent
+                          : widget.fill,
                       fit: videoFit.boxFit,
                       aspectRatio: videoFit.aspectRatio,
                     ),
