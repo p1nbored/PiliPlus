@@ -130,8 +130,10 @@ wsl -d Ubuntu
 ```
 
 ```bash
+# python3-venv 是必须的：mbedtls 构建会自己建 virtualenv，缺了它整个构建会中断
 sudo apt update && sudo apt install -y git wget curl build-essential meson ninja-build \
-     python3 python3-pip pkg-config unzip cmake
+     python3 python3-pip python3-venv pkg-config unzip cmake \
+     bzip2 xz-utils autoconf automake libtool
 
 git clone https://github.com/cnoim/libmpv-ohos-build.git ~/libmpv-ohos-build
 cd ~/libmpv-ohos-build
@@ -179,6 +181,43 @@ hdc install -r .\ohos\entry\build\default\outputs\default\entry-default-signed.h
 
 `pubspec.yaml` 的 `dependency_overrides` 已指向同级的 media-kit fork。
 如果把补丁推到了自己的仓库，把那几项改回 `git:` 形式即可。
+
+## Windows 上的四个坑
+
+实际跑通这套流程时按顺序踩到的，都会让构建以看起来无关的错误失败：
+
+1. **exFAT 不支持符号链接**
+   `ohpm install` 报 `00625004 SymLink Dir Failed` / `EBUSY`。
+   开发者模式和管理员权限都无效，项目必须放在 NTFS 分区。
+
+2. **`MAX_PATH` 260 字符限制**
+   `flutter pub get` 报一堆 `Filename too long`——pub 会克隆
+   `flutter_packages` 这个 monorepo，里面
+   `webview_flutter_wkwebview/example/ios/.../Icon-App-83.5x83.5@2x.png`
+   之类的路径超长。修复：
+
+   ```powershell
+   git config --global core.longpaths true
+   ```
+
+3. **pub 缓存被上一条的失败搞坏**
+   长路径导致 checkout 中途 `Aborting`，pub 缓存里 **29 个中有 7 个**
+   停在了错误的 commit 上。表现是看似无关的版本冲突，例如
+   `Package not available (the pubspec for shared_preferences 2.5.4 from git has version 2.2.0)`
+   ——目录名叫 `flutter_packages-19bd50ff…`，实际 HEAD 却是 `fd410050…`。
+   修复：把每个 `<名字>-<sha>` 目录强制 checkout 回它自己名字里的 sha。
+
+4. **Git LFS 对象在远端已丢失**
+   `flutter_audio_session` 和 `fluttertpc_audio_service` 用 LFS 跟踪了示例资源
+   （`icudtl.dat`、`video2.mp4`），而远端已经没有这些对象，smudge 过滤器会让
+   checkout 失败。这些只是示例资源，构建用不到：
+
+   ```powershell
+   $env:GIT_LFS_SKIP_SMUDGE = "1"
+   ```
+
+另外 Windows 的 git 不记录可执行位，从 Windows 克隆的仓库在 WSL 里
+`./download.sh` 会 `Permission denied`，构建脚本里已经统一 `chmod +x`。
 
 ## 验证 HDR 是否真的生效
 
