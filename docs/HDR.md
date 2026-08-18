@@ -130,10 +130,16 @@ wsl -d Ubuntu
 ```
 
 ```bash
-# python3-venv 是必须的：mbedtls 构建会自己建 virtualenv，缺了它整个构建会中断
-sudo apt update && sudo apt install -y git wget curl build-essential meson ninja-build \
-     python3 python3-pip python3-venv pkg-config unzip cmake \
-     bzip2 xz-utils autoconf automake libtool
+# 几个非显然但必须的依赖：
+#   python3-venv  mbedtls 会自己建 virtualenv，缺了它构建中断
+#   gperf         fontconfig 的 meson subproject，而 wrap 自动下载是关闭的
+#   meson>=1.6.1  Ubuntu 24.04 apt 只有 1.3.2，fontconfig 会直接拒绝
+sudo apt update && sudo apt install -y git wget curl build-essential ninja-build \
+     python3 python3-pip python3-setuptools python3-venv pkg-config unzip cmake \
+     ca-certificates file bzip2 xz-utils autoconf automake libtool libtool-bin \
+     gperf nasm yasm flex bison gettext autopoint texinfo help2man
+sudo apt remove -y meson
+pip3 install --break-system-packages -U meson ninja
 
 git clone https://github.com/cnoim/libmpv-ohos-build.git ~/libmpv-ohos-build
 cd ~/libmpv-ohos-build
@@ -143,7 +149,27 @@ git checkout -B feat-ohos-hdr local/feat-ohos-hdr
 # 指向本地打过补丁的 mpv
 export MPV_REPO=/mnt/c/Programs/PiliPlus-hdr-deps/mpv
 export MPV_REF=feat-ohos-hdr
+
+# download-ohos-rs.sh 只在它自己的进程里 source ~/.cargo/env，等 build.sh 跑到
+# dovi_tools.sh（杜比视界）时 cargo 已经不在 PATH 上了，必须自己加回来
+export PATH="$HOME/.cargo/bin:$PATH"
+
 ./download.sh && ./patch.sh && ./build.sh    # 会拉取数 GB 的 SDK，耗时 1~3 小时
+```
+
+从 Windows 克隆的仓库在 WSL 里没有可执行位，`./download.sh` 会
+`Permission denied`，先补一下：
+
+```bash
+find . -name '*.sh' -exec chmod +x {} +
+```
+
+`git fetch` 本地仓库还需要把 **`.git` 路径**也加进 safe.directory
+（只加工作树不够，否则报 "Could not read from remote repository"）：
+
+```bash
+git config --global --add safe.directory /mnt/c/Programs/PiliPlus-hdr-deps/mpv
+git config --global --add safe.directory /mnt/c/Programs/PiliPlus-hdr-deps/mpv/.git
 ```
 
 产物是 arm64-v8a 的 `libmpv.so`（用 `find ~/libmpv-ohos-build -name libmpv.so`
@@ -156,6 +182,17 @@ cp <找到的 libmpv.so> \
 ```
 
 该目录非空时 CMake 会跳过下载，直接使用这个 so。
+
+复制前先确认补丁真的编进去了（用的是预编译包就不会有这些字符串）：
+
+```bash
+for s in ohos-hdr-mode ohos-hdr-passthrough-metadata ohcodec_embed; do
+  printf '%-32s ' "$s"; grep -qa -e "$s" libmpv.so && echo FOUND || echo MISSING
+done
+grep -qa "dovi" libmpv.so && echo "libdovi(杜比视界): present"
+```
+
+三个都是 FOUND 才说明用的是打过补丁的 mpv。
 
 ### 第五步：配置签名
 
