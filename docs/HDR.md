@@ -176,12 +176,27 @@ git config --global --add safe.directory /mnt/c/Programs/PiliPlus-hdr-deps/mpv/.
 确认具体路径），复制到：
 
 ```bash
-mkdir -p /mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/libs/arm64-v8a
+mkdir -p /mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/ohos/libs/arm64-v8a
 cp <找到的 libmpv.so> \
-   /mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/libs/arm64-v8a/
+   /mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/ohos/libs/arm64-v8a/
 ```
 
-该目录非空时 CMake 会跳过下载，直接使用这个 so。
+该目录非空时 CMake 会跳过下载，直接使用这个 so
+（`ohos/src/main/cpp/CMakeLists.txt` 里 `LIBMPV_SRC` =
+`${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/arm64-v8a/`，`CMAKE_CURRENT_SOURCE_DIR`
+是 `ohos/src/main/cpp`，所以真正的目录是 **`media_kit_libs_ohos/ohos/libs/arm64-v8a/`**，
+不是模块根下的 `media_kit_libs_ohos/libs/arm64-v8a/`）。
+
+> **这里踩过一次坑，务必确认。** 先前按模块根下的 `libs/arm64-v8a/` 复制，CMake 根本
+> 不读那个目录；而 `ohos/libs/arm64-v8a/` 里早就躺着首次构建下载的预编译包，
+> 于是 `LIBMPV_SRC_VALID` 恒为真——既不重新下载，也永远不会发现那个 so 是旧的。
+> 结果就是**编了几个小时的补丁版 mpv 从未进过 HAP**，表现为 HDR 全黑。
+> 覆盖之后记得删掉这两个中间产物，否则打包仍会用旧的：
+>
+> ```
+> ohos/build/default/intermediates/libs/default/arm64-v8a/libmpv.so
+> ohos/build/default/intermediates/stripped_native_libs/default/arm64-v8a/libmpv.so
+> ```
 
 复制前先确认补丁真的编进去了（用的是预编译包就不会有这些字符串）：
 
@@ -189,10 +204,23 @@ cp <找到的 libmpv.so> \
 for s in ohos-hdr-mode ohos-hdr-passthrough-metadata ohcodec_embed; do
   printf '%-32s ' "$s"; grep -qa -e "$s" libmpv.so && echo FOUND || echo MISSING
 done
-grep -qa "dovi" libmpv.so && echo "libdovi(杜比视界): present"
+# 注意：不要用 "dovi" 判断补丁——stock ffmpeg 里也有这个字符串，恒为 present。
 ```
 
 三个都是 FOUND 才说明用的是打过补丁的 mpv。
+
+**光看源文件不够**，还要确认它真的进了 HAP——这是唯一能证明补丁上了设备的检查：
+
+```bash
+cd /c/Programs/PiliPlus
+unzip -o -q ohos/entry/build/default/outputs/default/entry-default-unsigned.hap       libs/arm64-v8a/libmpv.so -d /tmp/hapchk
+for s in ohos-hdr-mode ohos-hdr-passthrough-metadata ohcodec_embed; do
+  printf '%-32s ' "$s"
+  grep -qa -e "$s" /tmp/hapchk/libs/arm64-v8a/libmpv.so && echo FOUND || echo MISSING
+done
+```
+
+打过补丁的 so 约 49 MB；若看到约 27 MB 且三项 MISSING，说明打包的是预编译包。
 
 ### 第五步：配置签名
 
@@ -313,6 +341,90 @@ private configureForHybridComposition(platformView, request): void {
 
 肉眼判断：进入 HDR 后屏幕峰值亮度会明显抬升（尤其高光部分），
 而不只是整体画面变亮。
+
+### XComponent 的不透明黑底会盖住平台视图（黑屏根因）
+
+平台视图接上了、尺寸也对了，视频区域**仍然全黑**，SDR 正常——这是第三个坑，
+和 HDR 本身无关。
+
+`FlutterPage.ets`（引擎 HAR 内）的 `defaultPage()` 层级是：
+
+```ts
+Stack() {
+  ForEach(this.rootDvModel!!, ...)   // 平台视图（下层）
+  Text("").id("unfocus-xcomponent-node")
+  FlutterSurface({ ..., xComponentColor: this.xComponentColor })   // Flutter（上层）
+}
+```
+
+而 `FlutterSurface` 给 XComponent 刷的背景是：
+
+```ts
+.backgroundColor(this.firstFrameDisplayed && this.xComponentRenderFit == RenderFit.RESIZE_FILL ?
+  this.xComponentColor : Color.Transparent)
+```
+
+`xComponentColor` 在 `FlutterSurface` 和 `FlutterPage` 两处的默认值都是
+**`Color.Black`**，`xComponentRenderFit` 默认就是 `RESIZE_FILL`。也就是说
+**首帧之后，XComponent 会被刷上一层不透明黑底，而它在 Stack 里排在平台视图上方**，
+于是平台视图被完整遮住。
+
+这层黑底是 ArkUI 侧画的，位于平台视图之上、Flutter 画面之下，
+所以 Dart 侧再怎么把 `Video(fill:)` 设成透明都没用——`fill` 只作用于
+Flutter 表面内部。引擎的 `0001` / `0002` 两个补丁只解决了「挂不上视图树」和
+「尺寸 0×0」，没有碰这层背景。
+
+修复在应用侧一行即可，不需要再打引擎补丁（`Index.ets`）：
+
+```ts
+FlutterPage({ viewId: this.viewId, xComponentColor: Color.Transparent })
+```
+
+`FlutterPage.xComponentColor` 是 `@State`，ArkUI 允许父组件在构造时初始化，
+该初始值会经 `FlutterPage` 透传给 `FlutterSurface` 的同名 `@Prop`。
+
+注意它是 `@State` 而非 `@Prop`，**只取构造时的初始值，之后父组件再改不会同步**，
+所以这里只能无条件置透明，没法按「是否正在放 HDR」动态切换。这不会影响非 HDR
+场景：Flutter 自身画面是不透明的，透明的只有它主动画透明的区域（即平台视图模式
+下的视频区）。代价仅是首帧前/窗口尺寸变化的瞬间，露出的是窗口背景而不是黑色。
+
+### HDR 类型映射与色调映射标定（已按源码核对）
+
+| 片源 | qn | `--ohos-hdr-mode` | 动态元数据转交 | `--target-peak` | 谁做色调映射 |
+| --- | --- | --- | --- | --- | --- |
+| HDR Vivid（原生） | 129 | `auto` → VIVID | 否 | 1600 | libplacebo |
+| 杜比视界 | 126 | `vivid`* | 否 | 1600 | libplacebo |
+| HDR10 / HDR10+ | 125 | `hdr10` | 否 | 1600 | libplacebo |
+
+\* 仅当面板实测支持 Vivid（`HarmonyChannel.displaySupportsHdrVivid`）时；否则 `hdr10`。
+
+**没有任何一种片源能让设备自己解析动态元数据。** 三条结论都在源码/符号表里核对过：
+
+- **HDR Vivid**：`ohos_common.c:331-336` 只把 CUVA side data 的**存在**记成一个
+  bool（用来上报 VIVID 类型），载荷直接丢弃。原因是 FFmpeg 没有反序列化接口——
+  编出来的 `libmpv.so` 符号表里只有 `av_dynamic_hdr_vivid_alloc` /
+  `_create_side_data`，**没有 `_to_t35`**（HDR10+ 那套则四个都有）。
+- **杜比视界**：`ohos_common.c` 里没有任何 DOVI 分支。RPU 在
+  `mp_image.c:1185-1212` 就被 libplacebo 吃掉了，VO 层拿到的已经是成品 PQ。
+  按 Vivid 上报只是换个标签，源码注释自己写着「only the signalling differs」。
+- **HDR10+**：唯一能序列化的（`av_dynamic_hdr_plus_to_t35`），但
+  `OH_NativeBuffer_MetadataType` **没有 HDR10+ 这个类型**，只能挂在
+  `OH_VIDEO_HDR_VIVID` 下发出去——而那个类型意味着 CUVA 载荷。把 2094-40 的
+  字节贴上 CUVA 的标签，合成器要么丢弃要么误解析。加上 gpu-next 已经用同一份
+  元数据映射过一次，转交等于压两遍。所以 `ohos-hdr-passthrough-metadata`
+  **恒为关**。
+
+**`--target-peak` 所有 HDR 片源都要给。** 之前以为原生 Vivid 是「直通」所以不该给，
+那是错的：`vo=gpu-next` 一定会跑完整的 libplacebo 渲染，没有直通路径。不给
+target-peak 只是让它按 PQ 的名义峰值 10000 nit 反推目标，等于假设了一块比实际亮
+6 倍多的屏幕。目标机型标定值 `_kDisplayPeakNits = 1600`（SLM-W32，典型 700 nit /
+峰值 1600 nit）；鸿蒙没有查询面板峰值亮度的接口，所以按机型写死。
+
+> **`vo=ohcodec_embed` 不是「完整动态元数据」的出路，恰恰相反。**
+> `vo_ohcodec_embed.c` 从不调用 `vo_ohos_set_color` / `vo_ohos_set_frame`，
+> `reconfig()` 直接 `return 0`——这个 VO 下 mpv **色域、类型、静态元数据、动态
+> 元数据一个都不设**。动态元数据转交只在 gpu-next 上实现。本文档早先的相反说法
+> 是错的。
 
 ## 已知限制
 
