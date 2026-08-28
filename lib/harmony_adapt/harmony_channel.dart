@@ -3,11 +3,47 @@ import 'package:PiliPlus/harmony_adapt/continuation.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/utils/extension/get_ext.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:os_type/os_type.dart';
 
 abstract class HarmonyChannel {
+  /// @ohos.graphics.hdrCapability 的 HDRFormat 取值。
+  static const int hdrFormatHlg = 1;
+  static const int hdrFormatHdr10 = 2;
+  static const int hdrFormatVivid = 3;
+
+  /// 面板实际支持的 HDR 类型，启动时查一次。null 表示还没查到。
+  static Set<int>? _displayHdrFormats;
+
+  static Set<int> get displayHdrFormats => _displayHdrFormats ?? const {};
+
+  /// 面板是否支持 HDR Vivid。决定杜比视界 / HDR10+ 能否按 Vivid 上报——
+  /// 不支持时发 Vivid 信令只会让系统走兜底路径，不如老实上报 HDR10。
+  static bool get displaySupportsHdrVivid =>
+      _displayHdrFormats?.contains(hdrFormatVivid) ?? false;
+
+  /// 查询面板的 HDR 能力。只在鸿蒙上有意义，失败按“不支持”处理。
+  static Future<void> loadDisplayHdrFormats() async {
+    if (!OS.isHarmony) return;
+    try {
+      final list = await _channel.invokeMethod<List<Object?>>(
+        'getDisplayHdrFormats',
+      );
+      _displayHdrFormats = <int>{
+        for (final e in list ?? const <Object?>[])
+          if (e is int) e,
+      };
+      debugPrint(
+        '[HDRCAP] display hdrFormats=$_displayHdrFormats '
+        'vivid=$displaySupportsHdrVivid',
+      );
+    } on PlatformException catch (_) {
+      _displayHdrFormats = const <int>{};
+    }
+  }
+
   static double? _systemFontWeightScale;
 
   static double? get systemFontWeightScale => _systemFontWeightScale;

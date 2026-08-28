@@ -9,6 +9,7 @@ import Want from "@ohos.app.ability.Want";
 import ConfigurationConstant from "@ohos.app.ability.ConfigurationConstant";
 import { backgroundTaskManager } from "@kit.BackgroundTasksKit";
 import window from "@ohos.window";
+import display from "@ohos.display";
 import {
   Any,
   FlutterPlugin,
@@ -84,6 +85,22 @@ export default class HarmonyChannel implements FlutterPlugin {
 
   async onMethodCall(call: MethodCall, result: MethodResult): Promise<void> {
     switch (call.method) {
+      case "getDisplayHdrFormats": {
+        // 面板实际支持的 HDR 类型。取值见 @ohos.graphics.hdrCapability 的
+        // HDRFormat：0=NONE 1=VIDEO_HLG 2=VIDEO_HDR10 3=VIDEO_HDR_VIVID。
+        // 用来决定杜比视界 / HDR10+ 到底能不能按 HDR Vivid 上报，避免在不支持
+        // Vivid 的屏幕上盲目发 Vivid 信令。
+        try {
+          const d = display.getDefaultDisplaySync();
+          const formats: number[] = (d.hdrFormats ?? []) as number[];
+          console.log(`HarmonyChannel display hdrFormats: ${JSON.stringify(formats)}`);
+          result.success(formats);
+        } catch (err) {
+          console.error(`HarmonyChannel getDisplayHdrFormats failed: ${err}`);
+          result.success([] as number[]);
+        }
+        break;
+      }
       case "setFullScreenBars": {
         const fullscreen: boolean = call.argument("fullscreen") ?? false;
         await this.setFullScreenBars(fullscreen);
