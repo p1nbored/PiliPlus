@@ -141,7 +141,6 @@ class PLVideoPlayer extends StatefulWidget {
 class _PLVideoPlayerState extends State<PLVideoPlayer>
     with WidgetsBindingObserver, TickerProviderStateMixin {
   late AnimationController _animationController;
-  late VideoController videoController;
   late final CommonIntroController introController = widget.introController!;
   late final VideoDetailController videoDetailController =
       widget.videoDetailController!;
@@ -277,7 +276,6 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
       vsync: this,
       duration: const Duration(milliseconds: 100),
     );
-    videoController = plPlayerController.videoController!;
 
     if (PlatformUtils.isMobile) {
       Future.microtask(() {
@@ -1446,6 +1444,13 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                     ..updateSubtitleStyle();
                 },
                 child: Obx(() {
+                  // 同 _videoWidget：渲染路径切换会替换 VideoController，
+                  // 订阅 generation 才能让字幕重新绑到新的 controller 上。
+                  plPlayerController.playerGeneration.value;
+                  final videoController = plPlayerController.videoController;
+                  if (videoController == null) {
+                    return const SizedBox.shrink();
+                  }
                   final config = plPlayerController.subtitleConfig.value;
                   final padding = config.padding;
                   return Padding(
@@ -1965,7 +1970,9 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                             color: Colors.white,
                           ),
                           onLongPress:
-                              (Platform.isAndroid || OS.isHarmony || kDebugMode) &&
+                              (Platform.isAndroid ||
+                                      OS.isHarmony ||
+                                      kDebugMode) &&
                                   !isLive
                               ? screenshotWebp
                               : null,
@@ -2111,64 +2118,79 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
   }
 
   Widget get _videoWidget {
-    return Container(
-      clipBehavior: .none,
-      width: maxWidth,
-      height: maxHeight,
-      color: widget.fill,
-      child: Obx(
-        () => MouseInteractiveViewer(
-          scaleEnabled: !plPlayerController.controlsLock.value,
-          pointerSignalFallback: _onPointerSignal,
-          onPointerPanZoomUpdate: _onPointerPanZoomUpdate,
-          onPointerPanZoomEnd: _onPointerPanZoomEnd,
-          onPointerDown: _onPointerDown,
-          onPanStart: _onPanStart,
-          onPanUpdate: _onPanUpdate,
-          onPanEnd: _onPanEnd,
-          onScaleUpdate: _onScaleUpdate,
-          scaleGestureRecognizer: _scaleGestureRecognizer,
-          panEnabled: false,
-          minScale: plPlayerController.enableShrinkVideoSize ? 0.75 : 1,
-          maxScale: 2.0,
-          boundaryMargin: plPlayerController.enableShrinkVideoSize
-              ? const .all(double.infinity)
-              : .zero,
-          panAxis: .aligned,
-          transformationController: _transformationController,
-          childKey: _videoKey,
-          child: RepaintBoundary(
-            key: _videoKey,
-            child: Obx(
-              () {
-                final videoFit = plPlayerController.videoFit.value;
-                return Transform.flip(
-                  flipX: plPlayerController.flipX.value,
-                  flipY: plPlayerController.flipY.value,
-                  child: FittedBox(
-                    fit: videoFit.boxFit,
-                    alignment: widget.alignment,
-                    child: Video(
-                      width: maxWidth,
-                      height: maxHeight,
-                      controls: NoVideoControls, // 关闭 media_kit 内置按钮
-                      // 关闭 media_kit 内置 SubtitleView，避免与外层叠加重复
-                      subtitleViewConfiguration:
-                          const SubtitleViewConfiguration(
-                            visible: false,
-                          ),
-                      controller: plPlayerController.videoController!,
-                      // 平台视图渲染时视频由系统合成在 Flutter 表面之下，
-                      // 这里必须保持透明，否则会把视频整个盖住。
-                      fill: plPlayerController.usePlatformView
-                          ? Colors.transparent
-                          : widget.fill,
+    return Obx(
+      () => Container(
+        clipBehavior: .none,
+        width: maxWidth,
+        height: maxHeight,
+        // 平台视图合成在 Flutter 表面之下，这层不透明底色会把视频盖住。
+        color: plPlayerController.usePlatformViewRx.value ? null : widget.fill,
+        child: Obx(
+          () => MouseInteractiveViewer(
+            scaleEnabled: !plPlayerController.controlsLock.value,
+            pointerSignalFallback: _onPointerSignal,
+            onPointerPanZoomUpdate: _onPointerPanZoomUpdate,
+            onPointerPanZoomEnd: _onPointerPanZoomEnd,
+            onPointerDown: _onPointerDown,
+            onPanStart: _onPanStart,
+            onPanUpdate: _onPanUpdate,
+            onPanEnd: _onPanEnd,
+            onScaleUpdate: _onScaleUpdate,
+            scaleGestureRecognizer: _scaleGestureRecognizer,
+            panEnabled: false,
+            minScale: plPlayerController.enableShrinkVideoSize ? 0.75 : 1,
+            maxScale: 2.0,
+            boundaryMargin: plPlayerController.enableShrinkVideoSize
+                ? const .all(double.infinity)
+                : .zero,
+            panAxis: .aligned,
+            transformationController: _transformationController,
+            childKey: _videoKey,
+            child: RepaintBoundary(
+              key: _videoKey,
+              child: Obx(
+                () {
+                  // 订阅 generation：渲染路径切换会整体替换 VideoController，
+                  // 没有这一行 Obx 不会重建，Video 会一直挂在已 dispose 的旧
+                  // controller 上（切回 SDR 后黑屏，要退出再进全屏才恢复）。
+                  final gen = plPlayerController.playerGeneration.value;
+                  final videoController = plPlayerController.videoController;
+                  if (videoController == null) {
+                    return const SizedBox.shrink();
+                  }
+                  final videoFit = plPlayerController.videoFit.value;
+                  return Transform.flip(
+                    flipX: plPlayerController.flipX.value,
+                    flipY: plPlayerController.flipY.value,
+                    child: FittedBox(
                       fit: videoFit.boxFit,
-                      aspectRatio: videoFit.aspectRatio,
+                      alignment: widget.alignment,
+                      child: Video(
+                        // 必须带 key：_VideoState 只在 initState 订阅
+                        // player.stream.width/height，didUpdateWidget 不会重新
+                        // 订阅，所以 controller 换了必须换 State。
+                        key: ValueKey(gen),
+                        width: maxWidth,
+                        height: maxHeight,
+                        controls: NoVideoControls, // 关闭 media_kit 内置按钮
+                        // 关闭 media_kit 内置 SubtitleView，避免与外层叠加重复
+                        subtitleViewConfiguration:
+                            const SubtitleViewConfiguration(
+                              visible: false,
+                            ),
+                        controller: videoController,
+                        // 平台视图渲染时视频由系统合成在 Flutter 表面之下，
+                        // 这里必须保持透明，否则会把视频整个盖住。
+                        fill: plPlayerController.usePlatformViewRx.value
+                            ? Colors.transparent
+                            : widget.fill,
+                        fit: videoFit.boxFit,
+                        aspectRatio: videoFit.aspectRatio,
+                      ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
         ),

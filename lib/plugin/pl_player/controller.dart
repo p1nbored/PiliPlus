@@ -77,6 +77,12 @@ class PlPlayerController with BlockConfigMixin {
   Player? _videoPlayerController;
   VideoController? _videoController;
 
+  /// 渲染路径（平台视图 / 纹理）切换时 VideoController 会被整体替换，而它是
+  /// 普通字段，替换不会触发任何 Obx 重建 —— 于是 UI 继续持有已 dispose 的旧
+  /// controller（画面全黑、按钮卡死）。用下面两个 Rx 把替换广播出去。
+  final RxInt playerGeneration = 0.obs;
+  final RxBool usePlatformViewRx = false.obs;
+
   static PlPlayerController? _instance;
 
   final playerStatus = PlPlayerStatus(.playing);
@@ -424,24 +430,80 @@ class PlPlayerController with BlockConfigMixin {
   /// Flutter 纹理会把视频重采样进 Flutter 自己的 SDR 合成层，libmpv 挂在
   /// NativeWindow 上的色域与 HDR 元数据在这一步就丢了，系统因此不会进入 HDR
   /// 模式（没有峰值亮度，PQ 画面被按 sRGB 显示所以颜色也不对）。
-  bool get usePlatformView => _isOhos && _isHDRPlayback && Pref.hdrPlatformView;
+  /// 仅在**全屏**下使用平台视图。
+  ///
+  /// 平台视图由 RenderService 合成在 Flutter 表面「之下」，因此视频区域上方的
+  /// 每一层 Flutter 都必须透明。全屏时整屏都是播放器，做得到；内嵌时视频只是
+  /// 页面的一小块，要露出它就得在页面各层上按视频矩形抠一个透明洞
+  /// （BlendMode.clear），会波及顶栏 / 简介 / 评论等共用布局。
+  /// 所以内嵌时回退到纹理路径（几何正确但没有 HDR），全屏时才走平台视图。
+  bool get usePlatformView =>
+      _isOhos && _isHDRPlayback && Pref.hdrPlatformView && isFullScreen.value;
 
   /// 当前 VideoController 实际使用的渲染路径，用于判断是否需要重建播放器。
   bool _usesPlatformView = false;
 
-  /// 传给 mpv 的 `--ohos-hdr-mode`。
+  /// 目标设备的屏幕峰值亮度（nit）。杜比视界按这个值做色调映射。
   ///
-  /// 杜比视界在鸿蒙上没有原生信令，libplacebo 已经应用了 DV 的 RPU，因此这里
-  /// 只需把它按 HDR Vivid 上报即可。
+  /// 鸿蒙没有公开查询面板峰值亮度的接口（`display` 只给得出支持哪些 HDR
+  /// 格式），所以这里按当前目标机型标定：SLM-W32 典型 700 nit / 峰值 1600
+  /// nit。换机型时改这里。
+  static const double _kDisplayPeakNits = 1600;
+
+  /// 传给 mpv 的 `--ohos-hdr-mode`，决定向鸿蒙上报哪种 HDR 类型。
+  ///
+  /// 只影响**信令**，不影响画面：`vo=gpu-next` 下 libplacebo 一定会跑一遍完整
+  /// 渲染，没有任何「直通」路径（`vo_ohcodec_embed` 更不行，它连 set_color /
+  /// set_frame 都不调，色域和元数据一个都不设）。
+  ///
+  /// - 原生 HDR Vivid：`auto`。ohos_common.c 会从帧的 CUVA side data 认出它并
+  ///   上报 `OH_VIDEO_HDR_VIVID`，这是如实描述。
+  /// - 杜比视界：鸿蒙没有 DV 信令，libplacebo 应用 RPU 后已是成品 PQ，按 Vivid
+  ///   上报只是借个标签（面板支持时）。
+  /// - HDR10 / HDR10+：**如实上报 hdr10**。曾经试过按 Vivid 上报，但 Vivid 这个
+  ///   类型意味着背后有 CUVA 载荷，而 HDR10+ 是 ST 2094-40，两者没有转换关系，
+  ///   贴错标签只会让合成器要么丢弃要么误解析。
   String? get ohosHdrMode {
     if (!_isOhos || !_isHDRPlayback) {
       return null;
     }
-    if (_hdrQuality!.isDolbyVision && Pref.hdrDolbyVisionAsVivid) {
-      return 'vivid';
+    final quality = _hdrQuality!;
+    if (quality.isHDRVivid) {
+      return 'auto';
     }
-    return 'auto';
+    if (quality.isDolbyVision) {
+      return Pref.hdrDolbyVisionAsVivid &&
+              HarmonyChannel.displaySupportsHdrVivid
+          ? 'vivid'
+          : 'hdr10';
+    }
+    return 'hdr10';
   }
+
+  /// 是否把动态 HDR 元数据转交系统（`--ohos-hdr-passthrough-metadata`）。
+  ///
+  /// **恒为关**，这不是保守，是这条路在当前架构下走不通：
+  /// - HDR Vivid：FFmpeg 只有 `av_dynamic_hdr_vivid_alloc` /
+  ///   `_create_side_data`，**没有 `_to_t35`**（在编出来的 libmpv.so 符号表里
+  ///   核对过），CUVA 载荷还原不出来。
+  /// - HDR10+：能序列化（`av_dynamic_hdr_plus_to_t35` 存在），但
+  ///   `OH_NativeBuffer_MetadataType` 根本没有 HDR10+ 这个类型——只能挂在
+  ///   `OH_VIDEO_HDR_VIVID` 下发出去，而那个类型意味着 CUVA，等于把 2094-40
+  ///   的字节贴上 CUVA 的标签。而且 gpu-next 已经用同一份元数据映射过一次了，
+  ///   合成器再来一次就是压两遍。
+  /// - 杜比视界：ohos_common.c 里压根没有 DOVI 分支，无从转交。
+  ///
+  /// 要真正让设备做动态映射，得等 FFmpeg 提供 CUVA 序列化、或鸿蒙给出 HDR10+
+  /// 的 metadata type，不是这里能开关的。
+  bool? get ohosHdrPassthroughMetadata => _isOhos ? false : null;
+
+  /// 传给 mpv 的 `--target-peak`（面板峰值亮度，nit）。
+  ///
+  /// 所有 HDR 片源都要给。`gpu-next` 一定会做色调映射，不给的话 libplacebo 就
+  /// 按输出色彩空间反推目标峰值——PQ 的名义峰值是 10000 nit，等于假设了一块比
+  /// 实际亮 6 倍多的屏幕，高光会被无谓地压暗。
+  double? get ohosHdrTargetPeak =>
+      _isOhos && _isHDRPlayback ? _kDisplayPeakNits : null;
 
   late final progressType = Pref.btmProgressBehavior;
   late final enableQuickDouble = Pref.enableQuickDouble;
@@ -937,6 +999,8 @@ class PlPlayerController with BlockConfigMixin {
         hwdec: hwdec,
         usePlatformView: usePlatformView,
         ohosHdrMode: ohosHdrMode,
+        ohosHdrPassthroughMetadata: ohosHdrPassthroughMetadata,
+        ohosHdrTargetPeak: ohosHdrTargetPeak,
       ),
     );
     // await player.setAudioTrack(.auto());
@@ -977,6 +1041,7 @@ class PlPlayerController with BlockConfigMixin {
 
     if (player == null) {
       _usesPlatformView = usePlatformView;
+      usePlatformViewRx.value = usePlatformView;
       player = await _initPlayer();
       if (_playerCount == 0) {
         _removeListeners();
@@ -986,6 +1051,10 @@ class PlPlayerController with BlockConfigMixin {
         return;
       }
       _videoPlayerController = player;
+      // _videoController 由 _initPlayer() 赋值，此处两者均已就绪，可以广播。
+      // 注意不要放进上面 _playerCount == 0 的提前返回分支：那里播放器已被
+      // dispose，_videoController 是 null。
+      playerGeneration.value++;
       if (isAnim && superResolutionType.value != .disable) {
         await setShader();
       }
@@ -1861,6 +1930,27 @@ class PlPlayerController with BlockConfigMixin {
     } finally {
       _setFullScreen(status);
       _fsProcessing = false;
+      // 进出全屏会改变 usePlatformView，渲染路径在 VideoController 创建时就
+      // 固定了，因此必须重建播放器。放在 _fsProcessing 复位之后，避免重建
+      // 期间的状态回调被全屏流程吞掉。
+      unawaited(_syncRenderPath());
+    }
+  }
+
+  /// 渲染路径（平台视图 / 纹理）变化时重建播放器，保留进度与播放状态。
+  Future<void> _syncRenderPath() async {
+    if (!_isOhos) return;
+    if (_videoPlayerController == null) return;
+    if (_usesPlatformView == usePlatformView) return;
+    final wasPlaying = playerStatus.isPlaying;
+    final pos = Duration(milliseconds: positionInMilliseconds);
+    try {
+      await _createVideoController(dataSource, pos, null);
+      if (wasPlaying && _videoPlayerController != null) {
+        await play();
+      }
+    } catch (e) {
+      debugPrint('_syncRenderPath failed: $e');
     }
   }
 
