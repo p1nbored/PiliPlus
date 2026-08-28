@@ -48,13 +48,14 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
 ### 1. mpv（`feat-ohos-hdr`）
 
 - 恢复被 revert 掉的 `vo_ohcodec_embed.c`（“视频直通模式”）。这是鸿蒙版的
-  `mediacodec_embed`：OHCodec 硬解码器直接把帧渲染进 OHNativeWindow，
-  **HDR10 / HDR10+ / HDR Vivid 的动态元数据由系统解码器和合成器全程处理**。
+  `mediacodec_embed`：OHCodec 硬解码器直接把帧渲染进 OHNativeWindow。
+  （**注意**：它并不像早先以为的那样“动态元数据全程由系统处理”——该 VO 连
+  `vo_ohos_set_color` / `vo_ohos_set_frame` 都不调用，色域和元数据一个都不设。
+  详见下文《HDR 类型映射》一节末尾的更正。）
 - `ohos_common.c`：检测帧上的 HDR Vivid（CUVA）side data 并上报
   `OH_VIDEO_HDR_VIVID`；新增 `--ohos-hdr-mode=auto|no|hdr10|hlg|vivid`
   用于强制上报类型，这就是“杜比视界映射为 Vivid”的实现方式
-  （DV 的 RPU 由 libplacebo 应用，画面已经是成品 PQ，差别只在信令）；
-  新增 `--ohos-hdr-passthrough-metadata` 用于转发 HDR10+ 动态元数据。
+  （DV 的 RPU 由 libplacebo 应用，画面已经是成品 PQ，差别只在信令）。
 
 ### 2. media_kit（`feat-ohos-hdr`）
 
@@ -201,26 +202,27 @@ cp <找到的 libmpv.so> \
 复制前先确认补丁真的编进去了（用的是预编译包就不会有这些字符串）：
 
 ```bash
-for s in ohos-hdr-mode ohos-hdr-passthrough-metadata ohcodec_embed; do
+for s in ohos-hdr-mode ohcodec_embed; do
   printf '%-32s ' "$s"; grep -qa -e "$s" libmpv.so && echo FOUND || echo MISSING
 done
 # 注意：不要用 "dovi" 判断补丁——stock ffmpeg 里也有这个字符串，恒为 present。
 ```
 
-三个都是 FOUND 才说明用的是打过补丁的 mpv。
+两个都是 FOUND 才说明用的是打过补丁的 mpv。
 
 **光看源文件不够**，还要确认它真的进了 HAP——这是唯一能证明补丁上了设备的检查：
 
 ```bash
 cd /c/Programs/PiliPlus
 unzip -o -q ohos/entry/build/default/outputs/default/entry-default-unsigned.hap       libs/arm64-v8a/libmpv.so -d /tmp/hapchk
-for s in ohos-hdr-mode ohos-hdr-passthrough-metadata ohcodec_embed; do
+for s in ohos-hdr-mode ohcodec_embed; do
   printf '%-32s ' "$s"
   grep -qa -e "$s" /tmp/hapchk/libs/arm64-v8a/libmpv.so && echo FOUND || echo MISSING
 done
 ```
 
-打过补丁的 so 约 49 MB；若看到约 27 MB 且三项 MISSING，说明打包的是预编译包。
+未 strip 的补丁版 so 约 49 MB；进 HAP 的是 strip 过的版本（约 23 MB）——**不能
+按大小判断**，以上面两个字符串是否 FOUND 为准。预编译包约 27 MB 且两项 MISSING。
 
 ### 第五步：配置签名
 
@@ -390,29 +392,39 @@ FlutterPage({ viewId: this.viewId, xComponentColor: Color.Transparent })
 
 ### HDR 类型映射与色调映射标定（已按源码核对）
 
-| 片源 | qn | `--ohos-hdr-mode` | 动态元数据转交 | `--target-peak` | 谁做色调映射 |
-| --- | --- | --- | --- | --- | --- |
-| HDR Vivid（原生） | 129 | `auto` → VIVID | 否 | 1600 | libplacebo |
-| 杜比视界 | 126 | `vivid`* | 否 | 1600 | libplacebo |
-| HDR10 / HDR10+ | 125 | `hdr10` | 否 | 1600 | libplacebo |
+| 片源 | qn | `--ohos-hdr-mode` | `--target-peak` | 谁做色调映射 |
+| --- | --- | --- | --- | --- |
+| HDR Vivid（原生） | 129 | `vivid`† | 1600 | libplacebo |
+| 杜比视界 | 126 | `vivid`* | 1600 | libplacebo |
+| HDR10 / HDR10+ | 125 | `hdr10` | 1600 | libplacebo |
 
 \* 仅当面板实测支持 Vivid（`HarmonyChannel.displaySupportsHdrVivid`）时；否则 `hdr10`。
 
-**没有任何一种片源能让设备自己解析动态元数据。** 三条结论都在源码/符号表里核对过：
+† **不能用 `auto`。** `auto` 要靠 `ohos_common.c` 从帧的 CUVA side data 认出片源，
+而默认走的是鸿蒙硬解（见下），side data 永远不会产生，`auto` 于是一路落到
+`hdr10`——原生 Vivid 反被报成 HDR10。片源类型从 qn 就已经知道，直接指定即可。
 
-- **HDR Vivid**：`ohos_common.c:331-336` 只把 CUVA side data 的**存在**记成一个
-  bool（用来上报 VIVID 类型），载荷直接丢弃。原因是 FFmpeg 没有反序列化接口——
-  编出来的 `libmpv.so` 符号表里只有 `av_dynamic_hdr_vivid_alloc` /
-  `_create_side_data`，**没有 `_to_t35`**（HDR10+ 那套则四个都有）。
+**没有任何一种片源能让设备自己解析动态元数据**，`--ohos-hdr-passthrough-metadata`
+已经连同转交分支一起删除。结论都在源码 / 符号表 / SDK 头文件里核对过：
+
+- **默认根本产不出动态元数据**：`enableHA` 默认开、`hwdec` 默认 `auto`，mpv 会
+  选中 `ohcodec`，实际解码器是 `ff_hevc_oh_decoder`——它**完全不解析 SEI**，只从
+  UNSPEC62 NAL 取杜比视界的 RPU。HDR Vivid 的 CUVA、HDR10+ 的 2094-40 side data
+  一个都不会产生。
+- **HDR Vivid**：就算有 side data 也转交不了。FFmpeg 能解析 CUVA
+  （`ff_parse_itu_t_t35_to_dynamic_hdr_vivid`），但**没有 `_to_t35`**——本地
+  `libmpv.so` 符号表里只有 `av_dynamic_hdr_vivid_alloc` / `_create_side_data`，
+  上游 FFmpeg 至今也没有；原始 T.35 字节又在 SEI 解析时就被丢弃了。
 - **杜比视界**：`ohos_common.c` 里没有任何 DOVI 分支。RPU 在
   `mp_image.c:1185-1212` 就被 libplacebo 吃掉了，VO 层拿到的已经是成品 PQ。
   按 Vivid 上报只是换个标签，源码注释自己写着「only the signalling differs」。
 - **HDR10+**：唯一能序列化的（`av_dynamic_hdr_plus_to_t35`），但
   `OH_NativeBuffer_MetadataType` **没有 HDR10+ 这个类型**，只能挂在
-  `OH_VIDEO_HDR_VIVID` 下发出去——而那个类型意味着 CUVA 载荷。把 2094-40 的
-  字节贴上 CUVA 的标签，合成器要么丢弃要么误解析。加上 gpu-next 已经用同一份
-  元数据映射过一次，转交等于压两遍。所以 `ohos-hdr-passthrough-metadata`
-  **恒为关**。
+  `OH_VIDEO_HDR_VIVID` 下发出去——而那个类型意味着 CUVA 载荷。更糟的是它不会被
+  拒绝：`av_dynamic_hdr_plus_to_t35` 输出的是不带 T.35 头、首字节为
+  `application_version = 0x01` 的载荷，而 CUVA 解析器只校验
+  `system_start_code ∈ 0x01..0x07`——**0x01 正好通过**，于是被静默误解析成垃圾
+  曲线参数，比什么都不发更糟。这条分支因此已删除。
 
 **`--target-peak` 所有 HDR 片源都要给。** 之前以为原生 Vivid 是「直通」所以不该给，
 那是错的：`vo=gpu-next` 一定会跑完整的 libplacebo 渲染，没有直通路径。不给
@@ -428,13 +440,13 @@ target-peak 只是让它按 PQ 的名义峰值 10000 nit 反推目标，等于�
 
 ## 已知限制
 
-- **HDR Vivid / HDR10+ 的动态元数据只在直通模式（`vo=ohcodec_embed`）下完整**。
-  走 `gpu-next` 时 FFmpeg 只提供解析后的 `AVDynamicHDRVivid` 结构，
-  **没有** `av_dynamic_hdr_vivid_to_t35()` 之类的反序列化 API，
-  无法还原成 `OH_HDR_DYNAMIC_METADATA` 需要的 CUVA SEI 原始字节流。
-  HDR10+ 可以（`av_dynamic_hdr_plus_to_t35()` 存在），因此提供了
-  `--ohos-hdr-passthrough-metadata`，默认关闭——因为 `gpu-next` 交给合成器的
-  已经是 libplacebo 处理完的画面，再叠一层动态元数据会重复处理。
+- **动态 HDR 元数据一律不转交**，`--ohos-hdr-passthrough-metadata` 已删除。
+  完整理由见上文《HDR 类型映射与色调映射标定》，简述：默认的鸿蒙硬解路径
+  （`ff_hevc_oh_decoder`）根本不解析 SEI，动态元数据 side data 一个都产不出；
+  即便产出，FFmpeg 也没有 CUVA 序列化接口，原始 T.35 字节又在解析时被丢弃；
+  而 HDR10+ 的 2094-40 载荷挂上 CUVA 标签会被**静默误解析**，比不发更糟。
+  要真正做到，需要给 FFmpeg fork 打补丁保留原始 CUVA 载荷（含硬解路径），
+  并让 libplacebo 停止色调映射，否则合成器会再映射一遍。
 - 直通模式没有 mpv 的着色器、超分、tone mapping 和 VO 层字幕 / OSD 渲染，
   且只接受硬解帧。当前默认仍是 `gpu-next`；`ohcodec_embed` 已经编进去，
   可通过 `--vo` 切换验证。

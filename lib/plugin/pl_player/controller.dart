@@ -456,8 +456,11 @@ class PlPlayerController with BlockConfigMixin {
   /// 渲染，没有任何「直通」路径（`vo_ohcodec_embed` 更不行，它连 set_color /
   /// set_frame 都不调，色域和元数据一个都不设）。
   ///
-  /// - 原生 HDR Vivid：`auto`。ohos_common.c 会从帧的 CUVA side data 认出它并
-  ///   上报 `OH_VIDEO_HDR_VIVID`，这是如实描述。
+  /// - 原生 HDR Vivid：`vivid`。**不能用 `auto`**——auto 要靠 ohos_common.c 从帧
+  ///   的 CUVA side data 认出片源，但默认走的是鸿蒙硬解（hwdec=auto 会选中
+  ///   ohcodec），`ff_hevc_oh_decoder` 根本不解析 SEI，Vivid side data 永远不会
+  ///   产生，auto 于是一路落到 hdr10——原生 Vivid 反而被报成 HDR10。片源类型从
+  ///   qn 就已经知道，直接指定即可。
   /// - 杜比视界：鸿蒙没有 DV 信令，libplacebo 应用 RPU 后已是成品 PQ，按 Vivid
   ///   上报只是借个标签（面板支持时）。
   /// - HDR10 / HDR10+：**如实上报 hdr10**。曾经试过按 Vivid 上报，但 Vivid 这个
@@ -469,7 +472,7 @@ class PlPlayerController with BlockConfigMixin {
     }
     final quality = _hdrQuality!;
     if (quality.isHDRVivid) {
-      return 'auto';
+      return 'vivid';
     }
     if (quality.isDolbyVision) {
       return Pref.hdrDolbyVisionAsVivid &&
@@ -479,23 +482,6 @@ class PlPlayerController with BlockConfigMixin {
     }
     return 'hdr10';
   }
-
-  /// 是否把动态 HDR 元数据转交系统（`--ohos-hdr-passthrough-metadata`）。
-  ///
-  /// **恒为关**，这不是保守，是这条路在当前架构下走不通：
-  /// - HDR Vivid：FFmpeg 只有 `av_dynamic_hdr_vivid_alloc` /
-  ///   `_create_side_data`，**没有 `_to_t35`**（在编出来的 libmpv.so 符号表里
-  ///   核对过），CUVA 载荷还原不出来。
-  /// - HDR10+：能序列化（`av_dynamic_hdr_plus_to_t35` 存在），但
-  ///   `OH_NativeBuffer_MetadataType` 根本没有 HDR10+ 这个类型——只能挂在
-  ///   `OH_VIDEO_HDR_VIVID` 下发出去，而那个类型意味着 CUVA，等于把 2094-40
-  ///   的字节贴上 CUVA 的标签。而且 gpu-next 已经用同一份元数据映射过一次了，
-  ///   合成器再来一次就是压两遍。
-  /// - 杜比视界：ohos_common.c 里压根没有 DOVI 分支，无从转交。
-  ///
-  /// 要真正让设备做动态映射，得等 FFmpeg 提供 CUVA 序列化、或鸿蒙给出 HDR10+
-  /// 的 metadata type，不是这里能开关的。
-  bool? get ohosHdrPassthroughMetadata => _isOhos ? false : null;
 
   /// 传给 mpv 的 `--target-peak`（面板峰值亮度，nit）。
   ///
@@ -999,7 +985,6 @@ class PlPlayerController with BlockConfigMixin {
         hwdec: hwdec,
         usePlatformView: usePlatformView,
         ohosHdrMode: ohosHdrMode,
-        ohosHdrPassthroughMetadata: ohosHdrPassthroughMetadata,
         ohosHdrTargetPeak: ohosHdrTargetPeak,
       ),
     );
