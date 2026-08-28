@@ -448,7 +448,13 @@ struct Index {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       Stack({ alignContent: Alignment.Bottom }) {
-        FlutterPage({ viewId: this.viewId })
+        // xComponentColor 默认是 Color.Black，且在首帧之后会被真正刷上去
+        // （见 FlutterPage.ets 的 FlutterSurface.backgroundColor）。
+        // 平台视图的 DVModel 节点在 Stack 里排在 FlutterSurface 之前，也就是
+        // 渲染在它下方，所以这层不透明黑底会把 HDR 平台视图整个盖住——表现为
+        // 视频区域全黑。这里置为透明，让下方的平台视图透出来。
+        // Flutter 自身画面是不透明的，因此对非 HDR 场景没有影响。
+        FlutterPage({ viewId: this.viewId, xComponentColor: Color.Transparent })
           .width('100%')
           .height('100%')
         if (this.useNativeTabs && deviceInfo.sdkApiVersion >= 23) {
@@ -472,6 +478,12 @@ struct Index {
     }
     .width(this.winWidth > 0 ? this.winWidth : '100%')
     .height(this.winHeight > 0 ? this.winHeight : '100%')
+    // 平台视图（HDR）合成在 Flutter 表面之下，视频区域的 Flutter 是透明的。
+    // 视频没铺满的部分（黑边 / 上下左右留白）会一路透到这个根 Stack，默认是
+    // 白色，于是黑边显示为白色。这里铺黑底：它在平台视图**下方**，被视频覆盖
+    // 的地方看不见，只有黑边处露出来，正好是想要的效果。
+    // 非 HDR 路径下 Flutter 整屏不透明，这层底色不可见，因此没有副作用。
+    .backgroundColor(Color.Black)
   }
 
   onBackPress(): boolean {
