@@ -458,8 +458,10 @@ class PlPlayerController with BlockConfigMixin {
   /// 页面的一小块，要露出它就得在页面各层上按视频矩形抠一个透明洞
   /// （BlendMode.clear），会波及顶栏 / 简介 / 评论等共用布局。
   /// 所以内嵌时回退到纹理路径（几何正确但没有 HDR），全屏时才走平台视图。
+  /// 没有开关：关掉平台视图等于关掉 HDR（元数据会在 Flutter 纹理那一步丢光），
+  /// 所以它不是一个用户能做的取舍，跟随「启用 HDR 视频」即可。
   bool get usePlatformView =>
-      _isOhos && _isHDRPlayback && Pref.hdrPlatformView && isFullScreen.value;
+      _isOhos && _isHDRPlayback && isFullScreen.value;
 
   /// 当前 VideoController 实际使用的渲染路径，用于判断是否需要重建播放器。
   bool _usesPlatformView = false;
@@ -482,8 +484,11 @@ class PlPlayerController with BlockConfigMixin {
   ///   ohcodec），`ff_hevc_oh_decoder` 根本不解析 SEI，Vivid side data 永远不会
   ///   产生，auto 于是一路落到 hdr10——原生 Vivid 反而被报成 HDR10。片源类型从
   ///   qn 就已经知道，直接指定即可。
-  /// - 杜比视界：鸿蒙没有 DV 信令，libplacebo 应用 RPU 后已是成品 PQ，按 Vivid
-  ///   上报只是借个标签（面板支持时）。
+  /// - 杜比视界：鸿蒙没有 DV 信令（SDK 26 的 OH_NativeBuffer_MetadataType 里也
+  ///   没有 DV 这个值）。libplacebo 应用 RPU 后画面已经是成品 PQ，按 Vivid 上报
+  ///   只是借个标签让面板拉峰值亮度——**画面仍然是杜比视界**，没有转成 Vivid，
+  ///   也不会被合成器按 Vivid 二次处理（我们从不写 OH_HDR_DYNAMIC_METADATA，
+  ///   没有 CUVA 载荷可供误用）。面板不支持 Vivid 时退回 hdr10。
   /// - HDR10 / HDR10+：**如实上报 hdr10**。曾经试过按 Vivid 上报，但 Vivid 这个
   ///   类型意味着背后有 CUVA 载荷，而 HDR10+ 是 ST 2094-40，两者没有转换关系，
   ///   贴错标签只会让合成器要么丢弃要么误解析。
@@ -496,10 +501,9 @@ class PlPlayerController with BlockConfigMixin {
       return 'vivid';
     }
     if (quality.isDolbyVision) {
-      return Pref.hdrDolbyVisionAsVivid &&
-              HarmonyChannel.displaySupportsHdrVivid
-          ? 'vivid'
-          : 'hdr10';
+      // 没有开关：能不能按 Vivid 上报取决于面板支不支持，是设备能力而不是偏好，
+      // 直接按实测能力决定。
+      return HarmonyChannel.displaySupportsHdrVivid ? 'vivid' : 'hdr10';
     }
     return 'hdr10';
   }

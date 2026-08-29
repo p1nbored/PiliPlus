@@ -818,12 +818,8 @@ abstract final class Pref {
       _setting.get(SettingBoxKey.enableHDR, defaultValue: true);
 
   /// 使用平台视图（XComponent）渲染播放器，鸿蒙上触发 HDR 的必要条件
-  static bool get hdrPlatformView =>
-      _setting.get(SettingBoxKey.hdrPlatformView, defaultValue: true);
 
   /// 将杜比视界映射为 HDR Vivid 输出
-  static bool get hdrDolbyVisionAsVivid =>
-      _setting.get(SettingBoxKey.hdrDolbyVisionAsVivid, defaultValue: true);
 
   static Set<int> get danmakuBlockType => Set<int>.from(
     _setting.get(SettingBoxKey.danmakuBlockType, defaultValue: const <int>{}),

@@ -306,20 +306,6 @@ List<SettingsModel> get playSettings => [
       setKey: SettingBoxKey.enableHDR,
       defaultVal: true,
     ),
-    const SwitchModel(
-      title: 'HDR 使用平台视图渲染',
-      subtitle: '关闭后 HDR 元数据会被 Flutter 纹理丢弃，无法触发 HDR',
-      leading: Icon(Icons.draw_outlined),
-      setKey: SettingBoxKey.hdrPlatformView,
-      defaultVal: true,
-    ),
-    const SwitchModel(
-      title: '杜比视界映射为 HDR Vivid',
-      subtitle: '鸿蒙没有杜比视界原生信令，映射后按 HDR Vivid 输出',
-      leading: Icon(Icons.hdr_auto_outlined),
-      setKey: SettingBoxKey.hdrDolbyVisionAsVivid,
-      defaultVal: true,
-    ),
   ],
 ];
 
