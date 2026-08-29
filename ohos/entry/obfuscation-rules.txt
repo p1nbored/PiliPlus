@@ -1,0 +1,125 @@
+#-enable-property-obfuscation
+-enable-toplevel-obfuscation
+#-enable-filename-obfuscation
+
+# --- 代码压缩：移除不必要的空白和换行 ---
+# 风险评估：✅ 安全
+# 仅压缩输出格式，不影响运行时行为、逻辑或语义。
+# 唯一副作用：release 堆栈跟踪可读性下降（混淆后本就如此）。
+-compact
+-remove-comments
+-extra-options strip-not-compiled-module-name
+-remove-log
+
+# ============================================================
+# Keep Rules
+# ============================================================
+
+# --- 保留 JSON 序列化/反序列化涉及的属性名 ---
+# biliApi.ets: B站 API 响应字段
+# -keep-property-name
+#   code data message
+#   wbi_img img_url sub_url
+#   name face top_photo
+#   list vlist
+#   bvid title pic length created
+
+# EntryFormAbility.ets / UpCard24.ets: 卡片持久化与绑定数据字段
+# -keep-property-name
+#   mid avatar topPhoto
+#   latestTitle latestTime uploadsJson
+#   form uploads avatarUrl topPhotoUrl
+#   picUrl time
+
+# 合并去重后：
+-keep-property-name
+  code
+  data
+  message
+  wbi_img
+  img_url
+  sub_url
+  name
+  face
+  top_photo
+  list
+  vlist
+  bvid
+  title
+  pic
+  length
+  created
+  mid
+  avatar
+  topPhoto
+  latestTitle
+  latestTime
+  uploadsJson
+  form
+  uploads
+  avatarUrl
+  topPhotoUrl
+  picUrl
+  time
+  index
+  floating
+  mode
+
+# --- 保留 @ohos/flutter_ohos TextInputChannel 通信属性名 ---
+# flutter_ohos 的 consumer-rules.txt 仅保留 flutter/native*，不足以保护
+# TextInputChannel 与 Dart 侧的 MethodChannel 通信字段。
+# 若被混淆重命名，输入法将无法向 Flutter 传递编辑状态/配置。
+#
+# EditingState / TextEditingDeltaJson / TextEditState.fromJson (→ Dart & Dart →)
+  text
+  selectionBase
+  selectionExtent
+  composingBase
+  composingExtent
+# TextEditingDeltaJson (→ Dart)
+  oldText
+  deltaText
+  deltaStart
+  deltaEnd
+# EditingDelta (→ Dart)
+  deltas
+# Configuration.fromJson / fromMap (Dart →)
+  obscureText
+  autocorrect
+  enableSuggestions
+  enableIMEPersonalizedLearning
+  enableDeltaModel
+  inputType
+  inputAction
+  actionLabel
+  autofill
+  deviceKind
+  contentCommitMimeTypes
+  fields
+# InputType.fromJson (Dart →)
+  signed
+  decimal
+# Autofill.fromJson (Dart →)
+  uniqueIdentifier
+  hints
+  hintText
+  editingValue
+
+# --- 保留被配置文件以字符串引用的全局名 ---
+# module.json5: mainElement / abilities[].name / extensionAbilities[].name
+# EntryAbility.ets: formProvider.reloadForms(..., "EntryFormAbility", ...)
+-keep-global-name
+  EntryAbility
+  EntryFormAbility
+
+# --- 保留被配置文件引用的文件名 ---
+# main_pages.json: "pages/Index"
+# module.json5: srcEntry → EntryAbility.ets / EntryFormAbility.ets
+# form_config.json: src → UpCard.ets / UpCardMini.ets / UpCard24.ets
+-keep-file-name
+  Index
+  EntryAbility
+  EntryFormAbility
+  UpCard
+  UpCardMini
+  UpCard24

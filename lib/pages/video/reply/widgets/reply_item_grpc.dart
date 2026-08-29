@@ -46,12 +46,13 @@ import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:PiliPlus/utils/url_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:protobuf/protobuf.dart';
@@ -1141,13 +1142,21 @@ class ReplyItemGrpc extends StatelessWidget {
             ListTile(
               onTap: () {
                 Get.back();
+
+                final oid = item.oid;
+                final rpid = item.id;
+
                 autoWrapReportDialog(
                   context,
                   ReportOptions.commentReport,
+                  withContent: ReportOptions.withContentReply,
+                  contentRequired: ReportOptions.contentRequiredReply,
+                  reportUrl:
+                      'https://www.bilibili.com/h5/comment/report?oid=$oid&pageType=${item.type}&rpid=$rpid&platform=android&build=8430300&${ThemeUtils.themeUrl(colorScheme.isDark)}',
                   (reasonType, reasonDesc, banUid) async {
                     final res = await ReplyHttp.report(
-                      rpid: item.id,
-                      oid: item.oid,
+                      rpid: rpid,
+                      oid: oid,
                       reasonType: reasonType,
                       reasonDesc: reasonDesc,
                       banUid: banUid,
@@ -1191,19 +1200,14 @@ class ReplyItemGrpc extends StatelessWidget {
               showDialog(
                 context: context,
                 builder: (context) => Dialog(
+                  constraints: const BoxConstraints.tightFor(width: 380),
                   child: Padding(
                     padding: const .symmetric(horizontal: 20, vertical: 16),
-                    child: Builder(
-                      builder: (context) {
-                        final capture = SelectedContentCapture();
-                        return SelectionText(
-                          message,
-                          style: const TextStyle(fontSize: 15, height: 1.7),
-                          onSelectionChanged: capture.onSelectionChanged,
-                          contextMenuBuilder: (_, state) =>
-                              _filterMenuBuilder(context, state, capture),
-                        );
-                      },
+                    child: SelectionText(
+                      message,
+                      style: const TextStyle(fontSize: 15, height: 1.7),
+                      contextMenuBuilder: (_, state) =>
+                          _filterMenuBuilder(context, state),
                     ),
                   ),
                 ),
@@ -1239,15 +1243,21 @@ class ReplyItemGrpc extends StatelessWidget {
 
   static Widget _filterMenuBuilder(
     BuildContext context,
-    SelectableRegionState selectableRegionState,
-    SelectedContentCapture capture,
+    EditableTextState editableTextState,
   ) {
-    final items = ensureShareButton(
-      selectableRegionState.contextMenuButtonItems,
-      selectedTextOf: () => capture.selectedText,
-      hideToolbar: () => selectableRegionState.hideToolbar(),
+    String? selectedText() {
+      final TextEditingValue value = editableTextState.textEditingValue;
+      final TextSelection selection = value.selection;
+      if (!selection.isValid || selection.isCollapsed) return null;
+      return selection.textInside(value.text);
+    }
+
+    final items = ensureExtraButtons(
+      editableTextState.contextMenuButtonItems,
+      selectedTextOf: selectedText,
+      hideToolbar: () => editableTextState.hideToolbar(),
     );
-    final String? selected = capture.selectedText;
+    final String? selected = selectedText();
     if (selected != null && selected.isNotEmpty) {
       items.add(
         ContextMenuButtonItem(
@@ -1288,7 +1298,7 @@ class ReplyItemGrpc extends StatelessWidget {
     }
     return AdaptiveTextSelectionToolbar.buttonItems(
       buttonItems: items,
-      anchors: selectableRegionState.contextMenuAnchors,
+      anchors: editableTextState.contextMenuAnchors,
     );
   }
 }

@@ -13,7 +13,11 @@ import 'package:PiliPlus/common/widgets/keep_alive_wrapper.dart';
 import 'package:PiliPlus/common/widgets/route_aware_mixin.dart';
 import 'package:PiliPlus/common/widgets/scaffold/mini_scaffold.dart';
 import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
-import 'package:PiliPlus/common/widgets/scroll_physics.dart';
+import 'package:PiliPlus/common/widgets/scroll_behavior.dart'
+    show NoOverscrollIndicator;
+import 'package:PiliPlus/common/widgets/scroll_physics.dart'
+    show tabBarView, platformAlwaysClampingPhysics, platformClampingPhysics;
+import 'package:PiliPlus/common/widgets/simple_app_bar.dart';
 import 'package:PiliPlus/common/widgets/sliver/video_header.dart';
 import 'package:PiliPlus/common/widgets/svg/play_icon.dart';
 import 'package:PiliPlus/harmony_adapt/harmony_channel.dart';
@@ -21,6 +25,7 @@ import 'package:PiliPlus/models/common/episode_panel_type.dart';
 import 'package:PiliPlus/models_new/pgc/pgc_info_model/result.dart';
 import 'package:PiliPlus/models_new/video/video_detail/episode.dart' as ugc;
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
+import 'package:PiliPlus/models_new/video/video_detail/section.dart';
 import 'package:PiliPlus/models_new/video/video_detail/ugc_season.dart';
 import 'package:PiliPlus/models_new/video/video_tag/data.dart';
 import 'package:PiliPlus/pages/common/common_intro_controller.dart';
@@ -70,11 +75,10 @@ import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
 import 'package:floating/floating.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:os_type/os_type.dart';
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
 
@@ -157,26 +161,97 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   bool get _shouldShowSeasonPanel {
     if (videoDetailController.isFileSource ||
         isPortrait ||
-        !videoDetailController.isUgc) {
+        !videoDetailController.isUgc ||
+        !videoDetailController.plPlayerController.horizontalSeasonPanel) {
       return false;
     }
-    late final videoDetail = ugcIntroController.videoDetail.value;
-    return videoDetailController.plPlayerController.horizontalSeasonPanel &&
-        (videoDetail.ugcSeason != null ||
-            ((videoDetail.pages?.length ?? 0) > 1));
+    final videoDetail = ugcIntroController.videoDetail.value;
+    return (videoDetail.pages?.length ?? 0) > 1 ||
+        _hasRenderableSeason(videoDetail.ugcSeason?.sections);
+  }
+
+  /// 合集数据是否足以渲染播放列表面板。
+  ///
+  /// `ugcSeason != null` 并不足以作为判据：接口的 `sections` 是可空的，也可能是
+  /// 空数组或整段没有 episodes。面板内部按下标直接取用（EpisodePanel.list 是无类型
+  /// 的 List），取空即在 initState 抛出，release 下这一整列会被替换成
+  /// 0xF0C0C0C0 的 ErrorWidget 灰块——这在竖屏下看不到，只有平板 / 分屏等宽屏布局
+  /// 才会走到这一列。
+  static bool _hasRenderableSeason(List<SectionItem>? sections) =>
+      sections?.any((section) => section.episodes?.isNotEmpty == true) ?? false;
+
+  /// seasonIndex 与 sections 不同源（前者由 SeasonPanel 查找当前集时写入），
+  /// 钳位后再取下标，越界不应把整列炸成 ErrorWidget。
+  bool _seasonSectionReversed(List<SectionItem> sections) {
+    if (sections.isEmpty) return false;
+    final index = videoDetailController.seasonIndex.value.clamp(
+      0,
+      sections.length - 1,
+    );
+    return sections[index].isReversed;
   }
 
   final videoReplyPanelKey = GlobalKey();
   final videoRelatedKey = GlobalKey();
   final videoIntroKey = GlobalKey();
+  final _seasonPartPanelKey = GlobalKey<EpisodePanelState>();
+  final _seasonPanelKey = GlobalKey<EpisodePanelState>();
 
   Worker? _pipModeWorker;
+  Worker? _decorDarkWorker;
+  Worker? _decorFullScreenWorker;
+
+  /// 自由多窗装饰栏按钮配色是否由本页驱动。页面被覆盖（didPushNext）或
+  /// 销毁后置 false：覆盖期间的滚动/主题变化不应再把按钮抢回来。
+  bool _decorDarkActive = false;
+
+  /// 装饰栏按钮（窗口右上角）下方那块区域当前是否为深色底。
+  ///
+  /// 深色主题下 colorScheme.surface 本身就是深色，怎么算都是深色底；
+  /// 只有浅色主题需要逐布局判断：
+  /// - 竖屏布局：顶栏是 SimpleAppBar 与其下的渐显工具条，随滚动由黑渐变到
+  ///   colorScheme.surface，判据与 SimpleAppBar 给状态栏图标用的那套一致
+  /// - 横屏布局：右上角是 MiniScaffold（surface），只有顶部那条黑色 AppBar
+  ///   有高度（窗口压住状态栏，padding.top > 0）时才盖得住按钮所在的一带
+  /// - 近方形布局：顶部整条都是播放器，恒为黑
+  bool get _topBarIsDark {
+    // 全屏：整窗都是播放器
+    if (isFullScreen) return true;
+    if (colorScheme.brightness == Brightness.dark) return true;
+    if (_usesPortraitLayout) {
+      return videoDetailController.scrollRatio.value < 0.5;
+    }
+    if (_usesLandscapeLayout) {
+      return padding.top > 0;
+    }
+    return true;
+  }
+
+  /// 按顶栏实际底色同步自由多窗装饰栏按钮配色。
+  void _syncDecorDark() {
+    if (!_decorDarkActive) return;
+    HarmonyChannel.setDecorDark(this, _topBarIsDark);
+  }
+
+  /// 交还装饰栏按钮控制权（页面被覆盖/销毁）。
+  void _releaseDecorDark() {
+    _decorDarkActive = false;
+    HarmonyChannel.releaseDecorDark(this);
+  }
 
   /// 当前应用生命周期状态
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
 
-  late final _enableHero = Pref.enableHeroCoverAnimation && heroTag != null;
-  late bool _waitingHero = _enableHero;
+  // heroTag 恒非空（兼任 GetX 控制器 tag，toVideoPage 有随机值兜底），只有
+  // 真正被 Hero 包裹的卡片（首页视频卡/番剧卡）会生成带这两个前缀的稳定
+  // tag。其他入口（搜索等）没有源端 Hero，若也进入 _waitingHero 等待，
+  // 转场期间会滑入 300ms 空白页导致动画不连贯。
+  late final _enableHero =
+      Pref.enableHeroCoverAnimation &&
+      heroTag is String &&
+      ((heroTag as String).startsWith('video_hero_') ||
+          (heroTag as String).startsWith('pgc_hero_'));
+  late bool _waitingHero = _enableHero && (heroTag as String).startsWith('video_hero_');
   final _heroDuration = const Duration(milliseconds: 300);
   @override
   void initState() {
@@ -197,9 +272,19 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       _waitingHero ? _heroDuration : Duration.zero,
       () {
         PlPlayerController.setPlayCallBack(playCallBack);
-        // 页面顶部是黑色播放器：自由多窗的装饰栏按钮切浅色风格，否则浅色
-        // 模式下深色按钮不可见
-        HarmonyChannel.holdDecorDark(this);
+        // 自由多窗的装饰栏按钮跟随顶栏实际底色：顶部是黑色播放器时切浅色
+        // 风格（否则浅色模式下深色按钮不可见），顶栏随滚动渐变成 surface
+        // 后再交回系统颜色模式。滚动与全屏都会改变顶栏底色，各挂一个监听。
+        _decorDarkActive = true;
+        _syncDecorDark();
+        _decorDarkWorker = ever(
+          videoDetailController.scrollRatio,
+          (_) => _syncDecorDark(),
+        );
+        _decorFullScreenWorker = ever(
+          videoDetailController.plPlayerController.isFullScreen,
+          (_) => _syncDecorDark(),
+        );
         // 画中画状态翻转时强制重建：PiP 结束时若窗口尺寸恰好没变（如画中画
         // 期间从智慧多窗应用栏以小窗打开 app），没有视口变化触发重建，页面
         // 会滞留在画中画布局（黑边+播控被状态栏遮挡）。
@@ -278,6 +363,21 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     if (_lifecycleState != AppLifecycleState.resumed) return;
     if (videoDetailController.scrollCtr.hasClients) {
       videoDetailController.animToTop();
+      return;
+    }
+
+    // 横屏分栏没有 ExtendedNestedScrollView，各 tab 是自己维护的列表
+    final hasIntroTab = !(videoDetailController.isVertical.value && !isPortrait);
+    final tabIndex = videoDetailController.tabCtr.index;
+    final replyIndex = hasIntroTab ? 1 : 0;
+    final seasonIndex = replyIndex + (videoDetailController.showReply ? 1 : 0);
+    if (hasIntroTab && tabIndex == 0) {
+      videoDetailController.introScrollCtr?.animToTop();
+    } else if (tabIndex == replyIndex && videoDetailController.showReply) {
+      _videoReplyController.animateToTop();
+    } else if (tabIndex == seasonIndex && _shouldShowSeasonPanel) {
+      _seasonPartPanelKey.currentState?.animToTop();
+      _seasonPanelKey.currentState?.animToTop();
     }
   }
 
@@ -411,7 +511,9 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   @override
   void dispose() {
     _pipModeWorker?.dispose();
-    HarmonyChannel.releaseDecorDark(this);
+    _decorDarkWorker?.dispose();
+    _decorFullScreenWorker?.dispose();
+    _releaseDecorDark();
     plPlayerController
       ?..removeStatusLister(playerListener)
       ..removePositionListener(positionListener);
@@ -464,7 +566,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       return;
     }
 
-    HarmonyChannel.releaseDecorDark(this);
+    _releaseDecorDark();
     WidgetsBinding.instance.removeObserver(this);
 
     if ((Platform.isAndroid || OS.isHarmony) &&
@@ -503,7 +605,8 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       hideSystemBar();
     }
 
-    HarmonyChannel.holdDecorDark(this);
+    _decorDarkActive = true;
+    _syncDecorDark();
     WidgetsBinding.instance.addObserver(this);
 
     plPlayerController?.isLive = false;
@@ -572,7 +675,8 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     isWindowMode = MaxScreenSize.isWindowMode(
       width: maxWidth * videoDetailController.uiScale,
       height: maxHeight * videoDetailController.uiScale,
-    );
+    ) ||
+        (OS.isHarmony && HarmonyChannel.isWindowMode);
     videoDetailController.plPlayerController.screenRatio = maxHeight / maxWidth;
 
     final shortestSide = size.shortestSide;
@@ -598,10 +702,14 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     theme = videoDetailController.plPlayerController.darkVideoPage
         ? ThemeUtils.darkTheme
         : Theme.of(context);
+
+    // 顶栏底色还取决于方向与主题，二者变化都只经由本方法生效
+    _syncDecorDark();
   }
 
   bool removeAppBar(bool isFullScreen) =>
       videoDetailController.removeSafeArea ||
+      (OS.isHarmony && HarmonyChannel.isWindowMode && isFullScreen) ||
       (isWindowMode && isFullScreen && !isPortrait);
 
   Widget get childWhenDisabled {
@@ -665,7 +773,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     }
     return Obx(
       () {
-        final isFullScreen = _layoutFullScreen;
+        final isFullScreen = this.isFullScreen;
         return SimpleScaffold(
           // 全屏 + 平台视图时，Scaffold 的 Material 底色也在视频之上，必须透明。
           // 只限全屏：竖屏下 MiniScaffold 自己不画背景，全局透明会露出下层。
@@ -676,62 +784,48 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
               : null,
           appBar: removeAppBar(isFullScreen)
               ? null
-              : PreferredSize(
-                  preferredSize: Size.fromHeight(
-                    isFullScreen
-                        ? 0
-                        : (isPortrait
-                              ? (_fixedTopInset ?? padding.top)
-                              : padding.top),
-                  ),
-                  child: Obx(
-                    () {
-                      final scrollRatio =
-                          videoDetailController.scrollRatio.value;
-                      return AppBar(
-                        // 视频详情页不需要 AppBar 自动返回键（左上角会叠在状态栏上）。
-                        automaticallyImplyLeading: false,
-                        toolbarHeight: isFullScreen
-                            ? 0
-                            : (isPortrait
-                                  ? (_fixedTopInset ?? padding.top)
-                                  : padding.top),
-                        // 顶部间距显式控制：竖屏用固定值（首次状态栏高度），
-                        // 横屏用实时 padding，不再依赖 primary 隐式加 SafeArea，
-                        // 避免状态栏显隐带动正文位移。
-                        primary: false,
-                        backgroundColor: isPortrait && scrollRatio > 0
-                            ? Color.lerp(
-                                Colors.black,
-                                colorScheme.surface,
-                                scrollRatio,
-                              )
-                            : Colors.black,
-                        systemOverlayStyle: Platform.isAndroid
-                            ? SystemUiOverlayStyle(
-                                statusBarIconBrightness:
-                                    isPortrait && scrollRatio >= 0.5
-                                    ? theme.brightness.reverse
-                                    : .light,
-                                systemNavigationBarIconBrightness:
-                                    theme.brightness.reverse,
-                              )
-                            : null,
-                      );
-                    },
-                  ),
+              : Obx(
+                  () {
+                    final scrollRatio = videoDetailController.scrollRatio.value;
+                    final brightness = colorScheme.brightness;
+                    final Brightness statusBarBrightness;
+                    final Brightness statusBarIconBrightness;
+                    final backgroundColor = isPortrait && scrollRatio > 0
+                        ? Color.lerp(
+                            Colors.black,
+                            colorScheme.surface,
+                            scrollRatio,
+                          )!
+                        : Colors.black;
+                    if (isPortrait && scrollRatio >= 0.5) {
+                      statusBarBrightness = brightness;
+                      statusBarIconBrightness = brightness.reverse;
+                    } else {
+                      statusBarBrightness = .dark;
+                      statusBarIconBrightness = .light;
+                    }
+                    return SimpleAppBar(
+                      height: padding.top,
+                      backgroundColor: backgroundColor,
+                      brightness: brightness,
+                      statusBarBrightness: statusBarBrightness,
+                      statusBarIconBrightness: statusBarIconBrightness,
+                    );
+                  },
                 ),
           body: ExtendedNestedScrollView(
-            scrollBehavior: NoOverscrollBehavior(),
+            onlyOneScrollInBody: true,
+            physics: platformClampingPhysics,
             key: videoDetailController.scrollKey,
             controller: videoDetailController.scrollCtr,
-            // 全屏时禁止页面滚动：竖屏全屏只是把视频头撑满全屏，若不锁滚动，
-            // 底部上滑会把头部视频压缩、把详情内容从底部带出来。
-            physics: isFullScreen ? const NeverScrollableScrollPhysics() : null,
-            onlyOneScrollInBody: true,
+            scrollBehavior: const NoOverscrollIndicator(),
             pinnedHeaderSliverHeightBuilder: () {
-              double pinnedHeight = isFullScreen || !isPortrait
-                  ? _landscapeHeight
+              double pinnedHeight = this.isFullScreen || !isPortrait
+                  ? maxHeight -
+                        ((isWindowMode && !isPortrait) ||
+                                _harmonyFullscreenNoSafeArea
+                            ? 0
+                            : padding.top)
                   : videoDetailController.isExpanding ||
                         videoDetailController.isCollapsing
                   ? videoDetailController.animHeight
@@ -757,16 +851,18 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
             },
             headerSliverBuilder: (context, innerBoxIsScrolled) {
               final height = isFullScreen || !isPortrait
-                  ? _landscapeHeight
+                  ? maxHeight -
+                        ((isWindowMode && !isPortrait) ||
+                                _harmonyFullscreenNoSafeArea
+                            ? 0
+                            : padding.top)
                   : videoDetailController.isExpanding ||
                         videoDetailController.isCollapsing
                   ? videoDetailController.animHeight
                   : videoDetailController.videoHeight;
               return [
                 VideoHeader(
-                  // 全屏时头部最小高度与满屏高度一致，即使保留滚动偏移
-                  // 也不能把视频压缩，详情内容被挡在屏幕外。
-                  minExtent: isFullScreen ? height : kToolbarHeight,
+                  minExtent: kToolbarHeight,
                   maxExtent: height,
                   minVideoHeight: videoDetailController.minVideoHeight,
                   onScrollRatioChanged: videoDetailController.scrollRatio.call,
@@ -791,13 +887,10 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                   buildTabBar(onTap: videoDetailController.animToTop),
                   Expanded(
                     child: tabBarView(
+                      hitTestBehavior: .translucent,
                       controller: videoDetailController.tabCtr,
                       children: [
-                        videoIntro(
-                          isHorizontal: false,
-                          needCtr: false,
-                          isNested: true,
-                        ),
+                        videoIntro(isHorizontal: false, needCtr: false),
                         if (videoDetailController.showReply)
                           videoReplyPanel(isNested: true),
                         if (_shouldShowSeasonPanel) seasonPanel,
@@ -1451,7 +1544,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                 videoDetailCtr: videoDetailController,
                 heroTag: heroTag,
               ),
-              topInset: _fixedTopInset,
+              topInset: _harmonyFullscreenNoSafeArea ? null : _fixedTopInset,
               danmuWidget: isPipMode && pipNoDanmaku
                   ? null
                   : Obx(
@@ -1463,7 +1556,9 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                         isFullScreen: plPlayerController!.isFullScreen.value,
                         isFileSource: videoDetailController.isFileSource,
                         size: Size(width, height),
-                        topInset: _fixedTopInset,
+                        topInset: _harmonyFullscreenNoSafeArea
+                            ? null
+                            : _fixedTopInset,
                       ),
                     ),
               showEpisodes: showEpisodes,
@@ -1485,11 +1580,24 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   /// 显现导致画面下移。null 表示未捕获到（如移除安全边距场景），退化为 0。
   double? _fixedTopInset;
 
-  /// 横屏/全屏时的视频区域高度：全屏时固定为窗口高度，
-  /// 不随系统栏显隐导致的 padding 变化而变，避免旋转后画面跳动。
-  double get _landscapeHeight => isFullScreen
-      ? maxHeight
-      : maxHeight - (isWindowMode && !isPortrait ? 0 : padding.top);
+  /// 鸿蒙受限窗口（分屏/自由多窗/悬浮窗）内没有系统状态栏，但引擎仍会上报
+  /// 设备状态栏高度。仅在全屏时顶部安全区应被移除（视频铺满窗口、plplayer
+  /// 顶部控件/弹幕不再避让），非全屏仍按正常布局避让，故只作用于全屏路径。
+  bool get _harmonyFullscreenNoSafeArea =>
+      OS.isHarmony && HarmonyChannel.isWindowMode && isFullScreen;
+
+  /// 「左视频 + 右侧栏」的横屏布局（childWhenDisabledLandscape）是否生效。
+  bool get _usesLandscapeLayout =>
+      videoDetailController.horizontalScreen &&
+      maxWidth / maxHeight >= kScreenRatio;
+
+  /// 「顶部视频 + 下方 Tab」的竖屏布局（childWhenDisabled）是否生效。
+  /// 两者都不成立时为近方形布局（childWhenDisabledAlmostSquare）。
+  /// 由 build 与 [_topBarIsDark] 共用，避免分支条件两处漂移。
+  bool get _usesPortraitLayout =>
+      !videoDetailController.horizontalScreen ||
+      (!_usesLandscapeLayout &&
+          maxWidth / Style.aspectRatio16x9 < 0.4 * maxHeight);
 
   @override
   Widget build(BuildContext context) {
@@ -1500,11 +1608,9 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     } else {
       if (videoDetailController.plPlayerController.isPipMode) {
         child = plPlayer(width: maxWidth, height: maxHeight, isPipMode: true);
-      } else if (!videoDetailController.horizontalScreen) {
-        child = childWhenDisabled;
-      } else if (maxWidth / maxHeight >= kScreenRatio) {
+      } else if (_usesLandscapeLayout) {
         child = childWhenDisabledLandscape;
-      } else if (maxWidth / Style.aspectRatio16x9 < 0.4 * maxHeight) {
+      } else if (_usesPortraitLayout) {
         child = childWhenDisabled;
       } else {
         child = childWhenDisabledAlmostSquare;
@@ -1718,7 +1824,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
             () =>
                 videoDetailController.plPlayerController.usePlatformViewRx.value
                 ? const SizedBox.shrink()
-                : const ColoredBox(color: Colors.black),
+                : const ColoredBox(color: Colors.black, isAntiAlias: false),
           ),
         ),
 
@@ -1876,9 +1982,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       controller: needCtr
           ? videoDetailController.effectiveIntroScrollCtr
           : null,
-      physics: !needCtr
-          ? const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics())
-          : null,
+      physics: !needCtr ? platformAlwaysClampingPhysics : null,
       key: const PageStorageKey(CommonIntroController),
       slivers: [
         SliverPadding(
@@ -1909,11 +2013,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         controller: needCtr
             ? videoDetailController.effectiveIntroScrollCtr
             : null,
-        physics: !needCtr
-            ? const AlwaysScrollableScrollPhysics(
-                parent: ClampingScrollPhysics(),
-              )
-            : null,
+        physics: !needCtr ? platformAlwaysClampingPhysics : null,
         slivers: [
           if (videoDetailController.isUgc) ...[
             UgcIntroPanel(
@@ -2024,11 +2124,14 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
   Widget get seasonPanel {
     final videoDetail = ugcIntroController.videoDetail.value;
+    // 与 _shouldShowSeasonPanel 用同一判据，避免"入口显示了但内容取不到"
+    final sections = videoDetail.ugcSeason?.sections ?? const <SectionItem>[];
+    final hasSeason = _hasRenderableSeason(sections);
     return KeepAliveWrapper(
       child: Column(
         children: [
           if ((videoDetail.pages?.length ?? 0) > 1)
-            if (videoDetail.ugcSeason != null)
+            if (hasSeason)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14),
                 child: PagesPanel(
@@ -2060,10 +2163,11 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                     showTitle: false,
                     isSupportReverse: videoDetailController.isUgc,
                     onReverse: () => onReversePlay(isSeason: false),
+                    key: _seasonPartPanelKey,
                   ),
                 ),
               ),
-          if (videoDetail.ugcSeason != null) ...[
+          if (hasSeason) ...[
             if ((videoDetail.pages?.length ?? 0) > 1) ...[
               const SizedBox(height: 8),
               Divider(
@@ -2073,9 +2177,14 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
             ],
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
+              // key 必须在闭包内读取 videoDetail：SeasonPanel 的构造参数全是普通
+              // 字段，闭包不读任何 Rx 时 GetX 会抛「improper use of a GetX」，
+              // 而 RenderErrorBox 在高度无界的 Column 里会占满整列，表现为整个
+              // 播放列表分栏变成灰块。竖屏那处（ugc/view.dart）本就是这么写的。
+              // 同时合集数据换了也需要重建 State（episodes / seasonCid 有缓存）。
               child: Obx(
                 () => SeasonPanel(
-                  key: ValueKey(introController.videoDetail.value),
+                  key: ValueKey(ugcIntroController.videoDetail.value),
                   heroTag: heroTag,
                   canTap: false,
                   showEpisodes: showEpisodes,
@@ -2095,22 +2204,18 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                   initialTabIndex: videoDetailController.seasonIndex.value,
                   cover: videoDetailController.cover.value,
                   seasonId: videoDetail.ugcSeason!.id,
-                  list: videoDetail.ugcSeason!.sections!,
+                  list: sections,
                   bvid: videoDetailController.bvid,
                   aid: videoDetailController.aid,
                   cid: videoDetailController.seasonCid ?? 0,
-                  isReversed: ugcIntroController
-                      .videoDetail
-                      .value
-                      .ugcSeason!
-                      .sections![videoDetailController.seasonIndex.value]
-                      .isReversed,
+                  isReversed: _seasonSectionReversed(sections),
                   onChangeEpisode: videoDetailController.isUgc
                       ? ugcIntroController.onChangeEpisode
                       : pgcIntroController.onChangeEpisode,
                   showTitle: false,
                   isSupportReverse: videoDetailController.isUgc,
                   onReverse: () => onReversePlay(isSeason: true),
+                  key: _seasonPanelKey,
                 ),
               ),
             ),

@@ -29,7 +29,7 @@ import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/share_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
-import 'package:flutter/material.dart' hide PageView;
+import 'package:material_ui/material_ui.dart' hide PageView;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
@@ -500,7 +500,7 @@ class _ArticlePageState extends CommonDynPageState<ArticlePage> {
           width: maxWidth,
           margin: const .only(bottom: 10),
           child: PageView<CustomHorizontalDragGestureRecognizer>.builder(
-            physics: clampingScrollPhysics,
+            physics: tabBarScrollPhysics,
             horizontalDragGestureRecognizer:
                 CustomHorizontalDragGestureRecognizer.new,
             onPageChanged: controller.topIndex.call,

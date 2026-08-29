@@ -1,20 +1,23 @@
-import 'dart:io';
+import 'dart:io' show Platform;
 
+import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
+import 'package:PiliPlus/common/widgets/scale_app.dart';
+import 'package:PiliPlus/common/widgets/selection_text.dart';
 import 'package:PiliPlus/http/browser_ua.dart';
 import 'package:PiliPlus/main.dart';
 import 'package:PiliPlus/models/common/webview_menu_type.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
+import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/login_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
-import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
-import 'package:PiliPlus/common/widgets/selection_text.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:os_type/os_type.dart';
 
 class WebviewPage extends StatefulWidget {
   const WebviewPage({
@@ -37,7 +40,8 @@ class WebviewPage extends StatefulWidget {
 }
 
 class _WebviewPageState extends State<WebviewPage> {
-  late final String _url = widget.url ?? Get.parameters['url'] ?? '';
+  late final String _url =
+      (widget.url ?? Get.parameters['url'])?.http2https ?? '';
   late final String userAgent;
   final RxString title = ''.obs;
   final RxDouble progress = 1.0.obs;
@@ -51,6 +55,8 @@ class _WebviewPageState extends State<WebviewPage> {
     caseSensitive: false,
   );
 
+  late final double _previousScaleFactor;
+
   @override
   void initState() {
     super.initState();
@@ -61,6 +67,12 @@ class _WebviewPageState extends State<WebviewPage> {
           'mob' => BrowserUa.mob,
           _ => BrowserUa.platform,
         };
+    // CPF适配的Flutter在鸿蒙环境下对于flutter应用内调整了缩放比例（非1.0）的情况下platformview的视图大小会出现异常，非hcpp模式下会导致触摸漂移
+    // 需要主动调整缩放比例规避问题
+    _previousScaleFactor = ScaledWidgetsFlutterBinding.instance.scaleFactor;
+    if (_previousScaleFactor != 1.0) {
+      ScaledWidgetsFlutterBinding.instance.scaleFactor = 1.0;
+    }
     if (Get.arguments case final Map map) {
       _inApp = map['inApp'] ?? false;
       _off = map['off'] ?? false;
@@ -70,6 +82,11 @@ class _WebviewPageState extends State<WebviewPage> {
   @override
   void dispose() {
     _webViewController = null;
+    // CPF适配的Flutter在鸿蒙环境下对于flutter应用内调整了缩放比例（非1.0）的情况下platformview的视图大小会出现异常，非hcpp模式下会导致触摸漂移
+    // 需要主动调整缩放比例规避问题
+    if (_previousScaleFactor != 1.0) {
+      ScaledWidgetsFlutterBinding.instance.scaleFactor = _previousScaleFactor;
+    }
     super.dispose();
   }
 
@@ -86,7 +103,7 @@ class _WebviewPageState extends State<WebviewPage> {
         ),
       );
     }
-    return SimpleScaffold(
+    return Scaffold(
       appBar: widget.url != null
           ? null
           : AppBar(
@@ -170,6 +187,7 @@ class _WebviewPageState extends State<WebviewPage> {
               ],
             ),
       body: SafeArea(
+        top: false, // 屏蔽顶部的safearea，平板设备会异常带上safearea
         child: InAppWebView(
           webViewEnvironment: webViewEnvironment,
           initialSettings: InAppWebViewSettings(
@@ -240,14 +258,14 @@ class _WebviewPageState extends State<WebviewPage> {
                   ''',
               );
             }
-            _webViewController?.evaluateJavascript(
-              source: '''
-                document.querySelector('#internationalHeader').remove();
-                document.querySelector('#message-navbar').remove();
-              ''',
-            );
+            // _webViewController?.evaluateJavascript(
+            //   source: '''
+            //     document.querySelector('#internationalHeader').remove();
+            //     document.querySelector('#message-navbar').remove();
+            //   ''',
+            // );
           },
-          onDownloadStartRequest: Platform.isAndroid
+          onDownloadStartRequest: Platform.isAndroid || OS.isHarmony
               ? (controller, request) {
                   showDialog(
                     context: context,
@@ -317,24 +335,25 @@ class _WebviewPageState extends State<WebviewPage> {
             return null;
           },
           shouldOverrideUrlLoading: (controller, navigationAction) async {
-            if (_inApp) {
-              return NavigationActionPolicy.ALLOW;
+            if (!_inApp) {
+              final hasMatch = await PiliScheme.routePush(
+                navigationAction.request.url?.uriValue ?? Uri(),
+                selfHandle: true,
+                off: _off,
+              );
+              // if (kDebugMode) debugPrint('webview: [$url], [$hasMatch]');
+              if (hasMatch) {
+                progress.value = 1;
+                return .CANCEL;
+              }
             }
-            late String url = navigationAction.request.url.toString();
-            bool hasMatch = await PiliScheme.routePush(
-              navigationAction.request.url?.uriValue ?? Uri(),
-              selfHandle: true,
-              off: _off,
-            );
-            // if (kDebugMode) debugPrint('webview: [$url], [$hasMatch]');
-            if (hasMatch) {
-              progress.value = 1;
-              return NavigationActionPolicy.CANCEL;
-            } else if (_prefixRegex.hasMatch(url)) {
+            final url = navigationAction.request.url.toString();
+            if (_prefixRegex.hasMatch(url)) {
               if (context.mounted) {
-                SnackBar snackBar = SnackBar(
-                  content: const Text('当前网页将要打开外部链接，是否打开'),
+                final snackBar = SnackBar(
+                  persist: false,
                   showCloseIcon: true,
+                  content: const Text('当前网页将要打开外部链接，是否打开'),
                   action: SnackBarAction(
                     label: '打开',
                     onPressed: () => PageUtils.launchURL(url),
@@ -343,10 +362,10 @@ class _WebviewPageState extends State<WebviewPage> {
                 ScaffoldMessenger.of(context).showSnackBar(snackBar);
               }
               progress.value = 1;
-              return NavigationActionPolicy.CANCEL;
+              return .CANCEL;
             }
 
-            return NavigationActionPolicy.ALLOW;
+            return .ALLOW;
           },
         ),
       ),

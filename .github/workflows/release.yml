@@ -17,6 +17,32 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Compress images in assets/images
+        run: |
+          npm install --no-save sharp glob
+          node -e '
+            const sharp = require("sharp");
+            const glob = require("glob");
+            const fs = require("fs");
+
+            (async () => {
+              const files = glob.sync("assets/images/**/*.@(png|jpg|jpeg|webp)");
+              for (const f of files) {
+                const img = sharp(f);
+                const { format } = await img.metadata();
+
+                const buf = await (format === "jpeg"
+                  ? img.jpeg({ quality: 85, mozjpeg: true })
+                  : format === "webp"
+                    ? img.webp({ quality: 85 })
+                    : img.png({ compressionLevel: 9, palette: true })
+                ).toBuffer();
+
+                if (buf.length < fs.statSync(f).size) fs.writeFileSync(f, buf);
+              }
+            })();
+          '
+
       - name: Extract tag name
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then

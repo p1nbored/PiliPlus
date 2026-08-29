@@ -25,7 +25,7 @@ import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
-import 'package:flutter/material.dart' hide TextField;
+import 'package:material_ui/material_ui.dart' hide TextField;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
@@ -211,22 +211,23 @@ class _WhisperDetailPageState
         else
           PopupMenuItem(
             height: 42,
-            onTap: () => autoWrapReportDialog(
-              context,
-              ban: false,
-              ReportOptions.imMsgReport,
-              (reasonType, reasonDesc, banUid) =>
-                  _whisperDetailController.onReport(
-                    item,
-                    reasonType,
-                    reasonType == 0
-                        ? reasonDesc!
-                        : ReportOptions.imMsgReport['']![reasonType]!,
-                  ),
-            ),
+            onTap: () => onReport(item),
             child: const Text('举报', style: TextStyle(fontSize: 14)),
           ),
       ],
+    );
+  }
+
+  void onReport(Msg item) {
+    autoWrapReportDialog(
+      context,
+      ban: false,
+      ReportOptions.imMsgReport,
+      (reasonType, reasonDesc, banUid) => _whisperDetailController.onReport(
+        item,
+        reasonType,
+        reasonDesc ?? ReportOptions.imMsgReport['']![reasonType]!,
+      ),
     );
   }
 
@@ -254,19 +255,7 @@ class _WhisperDetailPageState
             : ListTile(
                 onTap: () {
                   Get.back();
-                  autoWrapReportDialog(
-                    context,
-                    ban: false,
-                    ReportOptions.imMsgReport,
-                    (reasonType, reasonDesc, banUid) =>
-                        _whisperDetailController.onReport(
-                          item,
-                          reasonType,
-                          reasonType == 0
-                              ? reasonDesc!
-                              : ReportOptions.imMsgReport['']![reasonType]!,
-                        ),
-                  );
+                  onReport(item);
                 },
                 dense: true,
                 title: const Text('举报', style: TextStyle(fontSize: 14)),

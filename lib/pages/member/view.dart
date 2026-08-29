@@ -35,9 +35,10 @@ import 'package:PiliPlus/pages/member_video_web/archive/view.dart';
 import 'package:PiliPlus/pages/member_video_web/season_series/view.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
-import 'package:PiliPlus/utils/cache_manager_ext.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
+import 'package:PiliPlus/utils/extension/nested_scroll_ext.dart';
+import 'package:PiliPlus/utils/extension/scroll_controller_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/num_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
@@ -45,7 +46,7 @@ import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
@@ -103,13 +104,10 @@ class _MemberPageState extends State<MemberPage> with WidgetsBindingObserver {
     if (Get.currentRoute != _routeName) return;
     // 仅在应用处于前台（resumed）时触发
     if (_lifecycleState != AppLifecycleState.resumed) return;
-    final outerCtr = _userController.scrollKey.currentState?.outerController;
-    if (outerCtr?.hasClients == true) {
-      outerCtr!.animateTo(
-        0,
-        duration: const Duration(milliseconds: 500),
-        curve: Curves.easeOutCirc,
-      );
+    final state = _userController.scrollKey.currentState;
+    if (state?.outerController.hasClients == true) {
+      state?.animToTop();
+      state?.outerController.animToTop();
     }
   }
 

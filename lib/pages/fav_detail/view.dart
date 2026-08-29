@@ -18,7 +18,7 @@ import 'package:PiliPlus/utils/request_utils.dart';
 import 'package:PiliPlus/utils/share_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 
@@ -61,8 +61,9 @@ class _FavDetailPageState extends State<FavDetailPage> with GridMixin {
           },
           child: SimpleScaffold(
             fab: Padding(
-              padding: const EdgeInsets.only(
-                right: kFloatingActionButtonMargin,
+              padding: EdgeInsets.only(
+                right: kFloatingActionButtonMargin + padding.right,
+                bottom: kFloatingActionButtonMargin + padding.bottom,
               ),
               child: Obx(
                 () => _favDetailController.folderInfo.value.mediaCount > 0

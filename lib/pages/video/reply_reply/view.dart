@@ -20,7 +20,7 @@ import 'package:PiliPlus/utils/num_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
 import 'package:fixnum/fixnum.dart' show Int64;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
@@ -272,7 +272,7 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
               icon: Icon(Icons.sort, size: 16, color: colorScheme.secondary),
               label: Obx(
                 () => Text(
-                  _controller.sortType.value.text!,
+                  _controller.sortType.value.label,
                   style: TextStyle(fontSize: 13, color: colorScheme.secondary),
                 ),
               ),

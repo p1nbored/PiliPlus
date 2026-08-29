@@ -17,7 +17,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # update when release
-version: 2.1.0+5691
+version: 2.1.2+5898
 
 environment:
   sdk: ">=3.11.1"
@@ -35,6 +35,15 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+
+  # Flutter 3.47 起 Material/Cupertino 被拆成独立 pub 包，上上游已全量迁移。
+  # 鸿蒙 fork 仍在 3.41，这里用仓库内的本地 shim 把这两个包名映射回 SDK 内置
+  # 实现，从而可以原样接受上游的 import 写法（详见 packages/*/pubspec.yaml）。
+  # 鸿蒙升到 3.47 后改回 `^1.0.0` 并删掉 packages/ 下两个目录即可。
+  material_ui:
+    path: packages/material_ui
+  cupertino_ui:
+    path: packages/cupertino_ui
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.9
@@ -45,7 +54,7 @@ dependencies:
   get:
     git:
       url: https://github.com/bggRGjQaUbCoE/getx.git
-      ref: 81b8a71982f89b46fa868b315cd71ff6a6ddf895
+      ref: dev
 
   # 网络
   dio: 5.9.2
@@ -64,8 +73,7 @@ dependencies:
 
   # 存储
   path_provider: ^2.1.5
-  hive_ce: ^2.2.3
-  hive_flutter: ^1.1.0
+  hive_ce: ^2.19.3
 
   # 设备信息
   device_info_plus: ^10.1.0
@@ -147,7 +155,7 @@ dependencies:
   # 2.添加自动旋转检测，对齐上游安卓行为
   native_device_orientation:
     git:
-      url: https://atomgit.com/hellozeronick/fluttertpc_native_device_orientation.git
+      url: https://gitcode.com/hellozeronick/fluttertpc_native_device_orientation.git
       ref: br_2.1.0_ohos
   protobuf: ^6.0.0
   # animations: ^2.0.11
@@ -210,11 +218,11 @@ dependencies:
   intl: ^0.20.2
   archive: ^4.0.9
   flutter_svg: ^2.3.0
-  image_cropper: ^11.0.0
+  image_cropper: ^12.0.0
   #解压直播消息
   brotli: ^0.6.0
   expandable: ^5.0.1
-  flex_seed_scheme: ^3.6.1
+  flex_seed_scheme: ^4.0.1
   live_photo_maker: ^0.0.6
   fl_chart: ^1.0.0
   synchronized: ^3.4.0+1
@@ -233,6 +241,8 @@ dependencies:
   # image: ^4.7.1
   # window_manager: ^0.5.1
   win32: ^6.3.0
+  # FontUtils 枚举 Windows / Linux 系统字体用（上游 4ca037345 引入）
+  ffi: ^2.2.0
   window_manager:
     git:
       url: https://github.com/bggRGjQaUbCoE/window_manager.git
@@ -266,11 +276,23 @@ dependencies:
   http2: any
   screen_retriever: any
   characters: any
-  cached_network_image_ce: 4.9.0
+  # 上游自 66a191b01 (refa: cache manager #2266) 起改用自家 fork，
+  # 该 fork 复用 HTTP client、精简了 flutter_cache_manager 依赖。
+  # 这里 pin 到具体 commit 而非上游的 ref: develop，保证可复现。
+  cached_network_image_ce:
+    git:
+      url: https://github.com/My-Responsitories/flutter_cached_network_image_ce.git
+      path: cached_network_image
+      ref: dacec4de669b4c52c59576509db069e3194408ac
   shared_preferences: ^2.2.1
   package_info_plus: ">=4.0.0 <11.0.0"
 
 dependency_overrides:
+  # 强制第三方包里的 material_ui/cupertino_ui 也走本地 shim
+  material_ui:
+    path: packages/material_ui
+  cupertino_ui:
+    path: packages/cupertino_ui
   meta: ^1.18.3 # 兼容液态玻璃
   device_info_plus:
     git:
@@ -290,12 +312,12 @@ dependency_overrides:
     git:
       url: https://gitcode.com/openharmony-tpc/flutter_packages.git
       path: packages/video_player/video_player
-      ref: br_video_player-v2.9.2_ohos
+      ref: br_video_player-v2.11.1_ohos
   url_launcher: # 打开链接.鸿蒙适配
     git:
-      url: https://gitcode.com/openharmony-tpc/flutter_packages.git
-      path: packages/url_launcher/url_launcher
-      ref: br_url_launcher-v6.3.2_ohos_dev
+      url: https://gitcode.com/hellozeronick/url_launcher.git
+      path: url_launcher
+      ref: main
   path_provider: # 应用可用路径.鸿蒙适配
     git:
       url: "https://gitcode.com/openharmony-tpc/flutter_packages.git"
@@ -371,7 +393,7 @@ dependency_overrides:
     git:
       url: https://gitcode.com/CPF-Flutter/fluttertpc_image_cropper.git
       path: ./image_cropper
-      ref: br_v11.0.0_ohos
+      ref: br_v12.2.1_ohos_dev
   shared_preferences:
     git:
       url: https://gitcode.com/CPF-Flutter/flutter_packages.git
@@ -395,7 +417,7 @@ dev_dependencies:
   flutter_lints: ^2.0.0
   flutter_launcher_icons: ^0.14.4
   # hive_generator: ^2.0.1
-  build_runner: 2.4.13
+  build_runner: ^2.10.3
   flutter_native_splash: ^2.4.6
 
 flutter_launcher_icons:

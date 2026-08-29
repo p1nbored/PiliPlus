@@ -15,7 +15,7 @@ import 'package:PiliPlus/pages/search/controller.dart' show DebounceStreamState;
 import 'package:PiliPlus/utils/extension/context_ext.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:PiliPlus/utils/extension/scroll_controller_ext.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:get/get.dart';
 
 class DynMentionPanel extends StatefulWidget {
@@ -32,10 +32,10 @@ class DynMentionPanel extends StatefulWidget {
     BuildContext context, {
     double offset = 0,
     ValueChanged<double>? onCachePos,
-  }) {
+  }) async {
     final wasVisible = HarmonyChannel.hdsBarVisible;
     HarmonyChannel.setShellBarsHidden(true);
-    return showModalBottomSheet(
+    final sheet = await showModalBottomSheet(
       context: Get.context!,
       useSafeArea: true,
       isScrollControlled: true,
@@ -58,6 +58,7 @@ class DynMentionPanel extends StatefulWidget {
     ).then((_) {
       if (wasVisible) HarmonyChannel.setShellBarsHidden(false);
     });
+    return sheet;
   }
 
   @override

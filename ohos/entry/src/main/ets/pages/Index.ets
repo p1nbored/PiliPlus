@@ -1,9 +1,9 @@
+import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
+import { deviceInfo } from '@kit.BasicServicesKit';
+import { HdsAnimationMode, hdsMaterial, HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
 import common from '@ohos.app.ability.common';
 import window from '@ohos.window';
 import { FlutterPage } from '@ohos/flutter_ohos';
-import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
-import { HdsAnimationMode, hdsMaterial, HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
-import { deviceInfo } from '@kit.BasicServicesKit';
 
 let storage = LocalStorage.getShared();
 
@@ -93,6 +93,8 @@ struct Index {
   @State winWidth: number = 0;
   @State winHeight: number = 0;
   @State bottomAvoidAreaHeight: number = 0;
+  @State bgColor: ResourceColor = $r("app.color.start_window_background")
+
   private categoryController: TabsController = new TabsController();
   private controller: HdsTabsController = new HdsTabsController();
   private win: window.Window | null = null;
@@ -174,6 +176,9 @@ struct Index {
     }).catch((err: Object) => {
       console.error(TAG, `getLastWindow failed: ${err}`);
     });
+    setTimeout((): void => {
+      this.bgColor = Color.Black
+    }, 3000)
   }
 
   aboutToDisappear(): void {
@@ -347,6 +352,7 @@ struct Index {
       })
       .id('topBarBg')
       .hitTestBehavior(HitTestMode.Transparent)
+      .align(Alignment.Top)
 
       Column() {
         Row({ space: 8 }) {
@@ -407,6 +413,7 @@ struct Index {
       .padding({ top: this.statusBarHeight})
       .id('topBarContent')
       .hitTestBehavior(HitTestMode.Default)
+      .align(Alignment.Top)
     }
     .height(this.homeHideTopBar && this.topBarCollapsed
       ? TOP_BAR_COLLAPSED_HEIGHT
@@ -415,6 +422,7 @@ struct Index {
     .width('100%')
     .hitTestBehavior(HitTestMode.Default)
     .visibility(this.topBarHidden ? Visibility.None : Visibility.Visible)
+    .align(Alignment.Top)
   }
 
   @Builder
@@ -443,47 +451,37 @@ struct Index {
         materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
       }
     })
+    .visibility(this.navTabs.length <= 1 || this.shellBarsHidden
+      ? Visibility.None
+      : Visibility.Visible)
+    .align(Alignment.Bottom)
+    .hitTestBehavior(HitTestMode.Transparent)
   }
 
   build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Stack({ alignContent: Alignment.Bottom }) {
-        // xComponentColor 默认是 Color.Black，且在首帧之后会被真正刷上去
-        // （见 FlutterPage.ets 的 FlutterSurface.backgroundColor）。
-        // 平台视图的 DVModel 节点在 Stack 里排在 FlutterSurface 之前，也就是
-        // 渲染在它下方，所以这层不透明黑底会把 HDR 平台视图整个盖住——表现为
-        // 视频区域全黑。这里置为透明，让下方的平台视图透出来。
-        // Flutter 自身画面是不透明的，因此对非 HDR 场景没有影响。
-        FlutterPage({ viewId: this.viewId, xComponentColor: Color.Transparent })
-          .width('100%')
-          .height('100%')
-        if (this.useNativeTabs && deviceInfo.sdkApiVersion >= 23) {
-          Column() {
-            this.hdsMainTabs()
-          }
-          .hitTestBehavior(HitTestMode.Transparent)
-          .width('100%')
-          .height('100%')
-          .visibility(this.navTabs.length <= 1 || this.shellBarsHidden
-            ? Visibility.None
-            : Visibility.Visible)
-        }
+    Stack({ alignContent: Alignment.Top }) {
+      // xComponentColor 置透明：HDR 平台视图由 RenderService 合成在
+      // FlutterSurface 之下，不能被 XComponent 的黑底盖住。
+      // 注意上游的 RenderFit.TOP 已经让 FlutterSurface 的黑底判断恒假
+      // （见 FlutterPage.ets 的 backgroundColor 三元），这里是双保险：
+      // 一旦 renderFit 改回 RESIZE_FILL，仍然不会黑屏。
+      FlutterPage({ viewId: this.viewId, xComponentRenderFit: RenderFit.TOP, xComponentColor: Color.Transparent })
+        .width('100%')
+        .height('100%')
+        .align(Alignment.Top)
+      if (this.useNativeTabs && deviceInfo.sdkApiVersion >= 23) {
+        this.hdsMainTabs()
       }
-      .width('100%')
-      .height('100%')
-
       if (this.useNativeTopBar && deviceInfo.sdkApiVersion >= 26) {
         this.homeTopBar()
       }
     }
     .width(this.winWidth > 0 ? this.winWidth : '100%')
     .height(this.winHeight > 0 ? this.winHeight : '100%')
-    // 平台视图（HDR）合成在 Flutter 表面之下，视频区域的 Flutter 是透明的。
-    // 视频没铺满的部分（黑边 / 上下左右留白）会一路透到这个根 Stack，默认是
-    // 白色，于是黑边显示为白色。这里铺黑底：它在平台视图**下方**，被视频覆盖
-    // 的地方看不见，只有黑边处露出来，正好是想要的效果。
-    // 非 HDR 路径下 Flutter 整屏不透明，这层底色不可见，因此没有副作用。
-    .backgroundColor(Color.Black)
+    // 平台视图（HDR）合成在 Flutter 表面之下，视频没铺满的部分（黑边）会一路
+    // 透到这个根 Stack，所以它必须是黑的。bgColor 初值为启动背景色，
+    // aboutToAppear 里 3s 后转黑——沿用上游行为，避免冷启动白闪。
+    .backgroundColor(this.bgColor)
   }
 
   onBackPress(): boolean {

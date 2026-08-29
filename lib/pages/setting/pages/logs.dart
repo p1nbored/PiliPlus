@@ -4,7 +4,6 @@ import 'dart:convert' show jsonDecode;
 import 'package:PiliPlus/common/constants.dart';
 import 'package:PiliPlus/common/widgets/button/icon_button.dart';
 import 'package:PiliPlus/common/widgets/loading_widget/loading_widget.dart';
-import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
 import 'package:PiliPlus/common/widgets/selection_text.dart';
 import 'package:PiliPlus/services/logger.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
@@ -15,9 +14,10 @@ import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:catcher_2/catcher_2.dart';
 import 'package:catcher_2/utils/log_printer.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:os_type/os_type.dart';
 
 const _snackBarDisplayDuration = Duration(seconds: 1);
 
@@ -40,13 +40,31 @@ class _LogsPageState extends State<LogsPage> {
     super.initState();
   }
 
-  void _initDeviceInfo() {
+  Future<void> _initDeviceInfo() async {
     if (Catcher2.instance case final c?) {
-      _deviceInfo = _ExpandedItem((
-        c.deviceParameters,
-        c.applicationParameters,
-        c.customParameters,
-      ));
+      if (OS.isHarmony) {
+        try {
+          final Map<String, dynamic> ohosDeviceParameters = {};
+          final ohosInfo = await DeviceInfoPlugin().ohosInfo;
+          ohosDeviceParameters["sdkApiVersion"] = ohosInfo.sdkApiVersion;
+          ohosDeviceParameters["deviceType"] = ohosInfo.deviceType;
+          ohosDeviceParameters["marketName"] = ohosInfo.marketName;
+          ohosDeviceParameters["osFullName"] = ohosInfo.osFullName;
+          _deviceInfo = _ExpandedItem((
+            ohosDeviceParameters,
+            c.applicationParameters,
+            c.customParameters,
+          ));
+        } catch (exception) {
+          logger.w("Couldn't load ohos device info", error: exception);
+        }
+      } else {
+        _deviceInfo = _ExpandedItem((
+          c.deviceParameters,
+          c.applicationParameters,
+          c.customParameters,
+        ));
+      }
     }
   }
 
@@ -108,7 +126,7 @@ class _LogsPageState extends State<LogsPage> {
   @override
   Widget build(BuildContext context) {
     final padding = MediaQuery.viewPaddingOf(context);
-    return SimpleScaffold(
+    return Scaffold(
       appBar: AppBar(
         title: const Text('日志'),
         actions: [
@@ -132,7 +150,12 @@ class _LogsPageState extends State<LogsPage> {
                 onTap: () {
                   enableLog = !enableLog;
                   GStorage.setting.put(SettingBoxKey.enableLog, enableLog);
-                  SmartDialog.showToast('已${enableLog ? '开启' : '关闭'}，重启生效');
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('已${enableLog ? '开启' : '关闭'}，重启生效'),
+                      duration: _snackBarDisplayDuration,
+                    ),
+                  );
                 },
                 child: Text('${enableLog ? '关闭' : '开启'}日志'),
               ),
@@ -239,13 +262,13 @@ class _InfoCard extends StatelessWidget {
     final colorScheme = ColorScheme.of(context);
     return _card([
       Row(
-        spacing: 8,
         children: [
           Icon(
             Icons.info_outline,
             size: 22,
             color: colorScheme.primary,
           ),
+          const SizedBox(width: 8),
           const Expanded(
             child: Text(
               '相关信息',
@@ -253,6 +276,30 @@ class _InfoCard extends StatelessWidget {
               maxLines: 1,
               overflow: .ellipsis,
             ),
+          ),
+          iconButton(
+            size: 34,
+            iconSize: 22,
+            tooltip: '复制',
+            onPressed: () {
+              final report = Report(
+                '',
+                null,
+                DateTime(1970),
+                info.item.$1,
+                info.item.$1,
+                info.item.$3,
+                null,
+              ).formatInfo();
+              Utils.copyText('```\n$report```', needToast: false);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('已将相关信息复制至剪贴板'),
+                  duration: _snackBarDisplayDuration,
+                ),
+              );
+            },
+            icon: const Icon(Icons.copy_outlined, size: 16),
           ),
           iconButton(
             size: 34,

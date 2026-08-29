@@ -155,15 +155,15 @@ abstract class HarmonyChannel {
 
   /// 控制原生 HDS 底栏/顶栏的显隐（弹窗、全屏页等场景）
   static Future<void> setShellBarsHidden(
-    bool hidden, {
-    bool retry = false,
-  }) async {
+    bool hidden, 
+    {bool retry = false, bool force = false,}
+  ) async {
     if (!OS.isHarmony) return;
     _hiddenByPage = hidden;
     final int total = retry ? 8 : 1;
     for (int i = 0; i < total; i++) {
       try {
-        _channel.invokeMethod('setShellBarsHidden', {'hidden': hidden});
+        _channel.invokeMethod('setShellBarsHidden', {'hidden': hidden,'force': force});
         return;
       } catch (_) {
         if (i == total - 1) return;
@@ -347,6 +347,11 @@ abstract class HarmonyChannel {
   /// 设备方向，基于方向的自动全屏等逻辑应据此跳过。
   static bool get isMiniWindow => _miniWindow;
 
+  /// 是否处于「横屏小窗」：系统小窗内把横屏视频切到了全屏，此时调用过原生
+  /// enableLandscapeMultiWindow。实测仅此状态下进画中画会黑屏（小窗内不全屏
+  /// 进画中画画面正常），故用它而不是 [isMiniWindow] 作为拦截条件。
+  static bool get isMiniWindowLandscape => _miniWindow && _landscape;
+
   static bool _windowMode = false;
 
   /// 应用窗口是否处于受限窗口模式（分屏/自由多窗/悬浮窗等非全屏窗口）。
@@ -379,12 +384,27 @@ abstract class HarmonyChannel {
     _channel.invokeMethod('setMiniWindowLandscape', {'landscape': landscape});
   }
 
-  /// 自由多窗装饰栏按钮（全屏/最小化/关闭）的颜色跟随应用颜色模式而非
-  /// 下方内容：浅色模式下深色按钮叠在播放页黑色顶部上视觉不可见。顶部为
-  /// 深色内容的页面（视频/直播播放页）在可见期间持有此状态，使按钮切为
-  /// 浅色风格；无人持有时恢复跟随系统。用持有者集合而非开关，规避
-  /// 路由切换（如视频页跳视频页）中生命周期回调顺序的不确定性。
+  /// 自由多窗装饰栏按钮（全屏/最小化/关闭）的颜色跟随「按钮下方那条顶栏
+  /// 的实际底色」而非系统颜色模式：浅色模式下深色按钮叠在播放页黑色顶部上
+  /// 视觉不可见。顶部为深色内容的页面（视频/直播播放页）在可见期间持有此
+  /// 状态，使按钮切为浅色风格；无人持有时恢复跟随系统。用持有者集合而非
+  /// 开关，规避路由切换（如视频页跳视频页）中生命周期回调顺序的不确定性。
+  ///
+  /// 注意「播放页 == 顶部是黑的」并不恒成立：视频页竖屏滚动时顶栏会由黑
+  /// 渐变到 colorScheme.surface（浅色模式下即白色），此时必须放开持有让
+  /// 按钮变回深色，否则白底浅按钮不可辨认。故持有方应随顶栏底色变化调用
+  /// [setDecorDark] 更新，而不是进页面时一次性持有到底。
   static final Set<Object> _darkDecorOwners = <Object>{};
+
+  /// 按 [dark] 更新 [owner] 的持有状态：顶栏底色为深色时持有（按钮浅色），
+  /// 变浅时释放（按钮跟随系统颜色模式）。重复调用同一状态是无害空操作。
+  static void setDecorDark(Object owner, bool dark) {
+    if (dark) {
+      holdDecorDark(owner);
+    } else {
+      releaseDecorDark(owner);
+    }
+  }
 
   static void holdDecorDark(Object owner) {
     if (!OS.isHarmony) return;
