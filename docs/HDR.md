@@ -28,12 +28,13 @@ TextureView 做不到。`cnctem/PiliPlusX` 的 `hdr` 分支正是这样修 Andro
 
 ## 修改内容
 
-改动分布在四层，本地布局如下：
+改动分布在五层，本地布局如下：
 
 ```
 C:\Programs\PiliPlus                                应用本体（分支 feat/ohos-hdr）
 C:\Programs\PiliPlus-hdr-deps\media-kit             分支 feat-ohos-hdr
 C:\Programs\PiliPlus-hdr-deps\mpv                   分支 feat-ohos-hdr
+C:\Programs\PiliPlus-hdr-deps\ffmpeg                分支 feat-ohos-hdr
 C:\Programs\PiliPlus-hdr-deps\libmpv-ohos-build     分支 feat-ohos-hdr
 C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用脚本
 ```
@@ -45,7 +46,20 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
 > 不支持，`ohpm install` 会以 `00625004 SymLink Dir Failed` / `EBUSY` 失败，
 > 开发者模式和管理员权限都救不了。必须放在 NTFS 分区。
 
-### 1. mpv（`feat-ohos-hdr`）
+### 1. FFmpeg（`feat-ohos-hdr`）
+
+- `libavcodec/ohdec.c`：鸿蒙硬解此前**只**从 UNSPEC62 NAL 取杜比视界 RPU，
+  完全不解析 SEI，于是 HDR Vivid 的 CUVA 和 HDR10+ 的 ST2094-40 side data
+  一个都产不出来（软解的 `hevcdec.c` 是有的）。现在复用同一批已经拆好的 NAL，
+  走 h2645 公共 SEI 解析器取出 T.35 载荷，挂到既有的 PTS 队列上随帧下发。
+  注意 SEI 扫描不再受 RPU 是否存在影响——HDR Vivid / HDR10+ 片源根本没有 RPU，
+  原先 `if (!rpu_nal) return 0;` 会把它们的动态元数据整个丢掉。
+- `configure`：`hevc_oh_decoder_select` 补上 `hevcparse hevc_sei dovi_rpudec`。
+  `ohdec.o` 一直在调用 `ff_h2645_packet_split` 和 `ff_dovi_rpu_parse` 却没有
+  声明这两个依赖，眼下能链接**只是因为**构建同时启用了软解 `hevc` 把它们捎带
+  进来。一旦精简白名单去掉 `hevc`，杜比视界会静默失效。
+
+### 2. mpv（`feat-ohos-hdr`）
 
 - 恢复被 revert 掉的 `vo_ohcodec_embed.c`（“视频直通模式”）。这是鸿蒙版的
   `mediacodec_embed`：OHCodec 硬解码器直接把帧渲染进 OHNativeWindow。
@@ -56,8 +70,15 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
   `OH_VIDEO_HDR_VIVID`；新增 `--ohos-hdr-mode=auto|no|hdr10|hlg|vivid`
   用于强制上报类型，这就是“杜比视界映射为 Vivid”的实现方式
   （DV 的 RPU 由 libplacebo 应用，画面已经是成品 PQ，差别只在信令）。
+- `mp_image.c`：把 HDR Vivid 的动态峰值接进 libplacebo 的色调映射。
+  libplacebo v7.360.1 完全没有 CUVA 支持（`src/` 下 `vivid` / `cuva` 零命中），
+  但它的 **CIE_Y** 通道要的正是 HDR Vivid 携带的那个量：PQ 域 0-1 亮度。
+  `maximum_maxrgb` / `average_maxrgb` 是分母 4095 的 12 bit PQ 值，`av_q2d()`
+  直接就是目标单位。不用 `scene_max[]` 是因为那个字段的单位是 cd/m²。
+  杜比视界的 L1 经 `pl_hdr_metadata_from_dovi_rpu()` 走同一个字段，故同时
+  带两者的片源仍以杜比视界为准。
 
-### 2. media_kit（`feat-ohos-hdr`）
+### 3. media_kit（`feat-ohos-hdr`）
 
 - 新增 `MediaKitVideoPlatformView.ets`：用 `XComponent` 承载视频的
   `PlatformView` + 工厂，并把 surfaceId 通过 method channel 交给 Dart。
@@ -68,14 +89,14 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
 - `VideoControllerConfiguration` 新增 `usePlatformView` 与 `ohosHdrMode`。
   默认仍走原来的纹理路径，不影响其他平台。
 
-### 3. Flutter 引擎（HAR 补丁）
+### 4. Flutter 引擎（HAR 补丁）
 
 - 实现 `PlatformViewsController.configureForHybridComposition`，用
   `NodeRenderType.RENDER_TYPE_DISPLAY` 建节点并挂进视图树——这是让 surface
   被 RenderService 直接合成、从而保住 HDR 元数据的关键一步。
 - 让引擎同时监听 `flutter/platform_views_2`，hybrid 视图才会被正常销毁。
 
-### 4. PiliPlus
+### 5. PiliPlus
 
 - `VideoQuality.isHDR` / `isDolbyVision`（对应 qn 125 / 126 / 129）。
 - `setDataSource(..., quality:)` 把当前画质传给播放器，播放器据此决定是否
@@ -147,9 +168,11 @@ cd ~/libmpv-ohos-build
 git remote add local /mnt/c/Programs/PiliPlus-hdr-deps/libmpv-ohos-build && git fetch local
 git checkout -B feat-ohos-hdr local/feat-ohos-hdr
 
-# 指向本地打过补丁的 mpv
+# 指向本地打过补丁的 mpv 与 ffmpeg
 export MPV_REPO=/mnt/c/Programs/PiliPlus-hdr-deps/mpv
 export MPV_REF=feat-ohos-hdr
+export FFMPEG_REPO=/mnt/c/Programs/PiliPlus-hdr-deps/ffmpeg
+export FFMPEG_REF=feat-ohos-hdr
 
 # download-ohos-rs.sh 只在它自己的进程里 source ~/.cargo/env，等 build.sh 跑到
 # dovi_tools.sh（杜比视界）时 cargo 已经不在 PATH 上了，必须自己加回来
@@ -173,26 +196,31 @@ git config --global --add safe.directory /mnt/c/Programs/PiliPlus-hdr-deps/mpv
 git config --global --add safe.directory /mnt/c/Programs/PiliPlus-hdr-deps/mpv/.git
 ```
 
-产物是 arm64-v8a 的 `libmpv.so`（用 `find ~/libmpv-ohos-build -name libmpv.so`
-确认具体路径），复制到：
+产物是 arm64-v8a 的 `libmpv.so`，路径是确定的：
+**`~/libmpv-ohos-build/libmpv/arm64-build/libmpv.so`**
+（`env.sh` 的 `DEST`，由 `scripts/mpv.sh` 收口）。不要用
+`find ~/libmpv-ohos-build -name libmpv.so` —— 它同时会匹配到中间产物
+`libmpv/mpv/.build/libmpv.so`。复制到：
 
 ```bash
-mkdir -p /mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/ohos/libs/arm64-v8a
-cp <找到的 libmpv.so> \
-   /mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/ohos/libs/arm64-v8a/
+LIBS=/mnt/c/Programs/PiliPlus-hdr-deps/media-kit/libs/ohos/media_kit_libs_ohos/libs/arm64-v8a
+mkdir -p $LIBS
+cp ~/libmpv-ohos-build/libmpv/arm64-build/libmpv.so $LIBS/
 ```
 
-该目录非空时 CMake 会跳过下载，直接使用这个 so
-（`ohos/src/main/cpp/CMakeLists.txt` 里 `LIBMPV_SRC` =
-`${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/arm64-v8a/`，`CMAKE_CURRENT_SOURCE_DIR`
-是 `ohos/src/main/cpp`，所以真正的目录是 **`media_kit_libs_ohos/ohos/libs/arm64-v8a/`**，
-不是模块根下的 `media_kit_libs_ohos/libs/arm64-v8a/`）。
+注意这里是**模块根**下的 `media_kit_libs_ohos/libs/arm64-v8a/`，
+不是 `media_kit_libs_ohos/ohos/libs/arm64-v8a/`。
+`ohos/src/main/cpp/CMakeLists.txt` 里的 `LIBMPV_LOCAL` 就指向模块根
+（`${CMAKE_CURRENT_SOURCE_DIR}/../../../../libs/arm64-v8a/libmpv.so`）；
+存在时它会被复制进 `LIBMPV_SRC` 并把 `LIBMPV_SRC_VALID` 置真，
+下载和解包两步都跳过。
 
-> **这里踩过一次坑，务必确认。** 先前按模块根下的 `libs/arm64-v8a/` 复制，CMake 根本
-> 不读那个目录；而 `ohos/libs/arm64-v8a/` 里早就躺着首次构建下载的预编译包，
-> 于是 `LIBMPV_SRC_VALID` 恒为真——既不重新下载，也永远不会发现那个 so 是旧的。
-> 结果就是**编了几个小时的补丁版 mpv 从未进过 HAP**，表现为 HDR 全黑。
-> 覆盖之后记得删掉这两个中间产物，否则打包仍会用旧的：
+> **早期版本在这里踩过坑（现已在 CMakeLists 里修掉）。** 当时只认
+> `ohos/libs/arm64-v8a/`，而那个目录里早就躺着首次构建下载的预编译包，
+> 于是 `LIBMPV_SRC_VALID` 恒为真——既不重新下载，也永远不会发现那个 so 是旧的，
+> **编了几个小时的补丁版 mpv 从未进过 HAP**，表现为 HDR 全黑。
+> 现在改用模块根路径，它在 ohos 模块之外，不会被解包覆盖，存在即优先。
+> 覆盖之后仍要删掉这两个中间产物，否则打包还是会用旧的：
 >
 > ```
 > ohos/build/default/intermediates/libs/default/arm64-v8a/libmpv.so
@@ -221,8 +249,22 @@ for s in ohos-hdr-mode ohcodec_embed; do
 done
 ```
 
-未 strip 的补丁版 so 约 49 MB；进 HAP 的是 strip 过的版本（约 23 MB）——**不能
-按大小判断**，以上面两个字符串是否 FOUND 为准。预编译包约 27 MB 且两项 MISSING。
+`bundle.sh` 收口的 `arm64-build/libmpv.so` 已经是 strip 过的，约 **24 MB**
+（预编译包约 27 MB 且两项 MISSING）。**不要按大小判断**，以上面几个字符串是否
+FOUND 为准。另外「本次构建是不是最新的」有个现成的反向标记：
+`ohos-hdr-passthrough` 在 `15939f77e` 里已删除，新构建里应当**查不到**；
+还能查到就说明用的是旧 so。
+
+**`ohdec.c` 的前缀 SEI 补丁（R0）另有一个确定的静态验证**，因为它没有引入新的
+字符串常量，只能从目标文件的符号引用上看：
+
+```bash
+B=~/libmpv-ohos-build/libmpv/ffmpeg/.build
+/sdk/bisheng/bin/llvm-nm --undefined-only $B/libavcodec/ohdec.o | grep ff_h2645_sei
+# 应当出现 ff_h2645_sei_message_decode 与 ff_h2645_sei_reset
+grep -E "^CONFIG_(HEVC_SEI|HEVCPARSE|DOVI_RPUDEC)=" $B/ffbuild/config.mak
+# 三项都应当是 =yes
+```
 
 ### 第五步：配置签名
 
@@ -304,6 +346,13 @@ NativeWindow output switched to BT.2020 HLG    # HLG
 如果看到的是 `Failed to set NativeWindow color space: <err>` 或
 `Failed to set NativeWindow HDR metadata type`，说明 surface 不接受 HDR
 属性——通常意味着仍然走在纹理路径上（确认“HDR 使用平台视图渲染”已开启）。
+
+**验证前缀 SEI 补丁是否生效（动态元数据）**：`ohos-hdr-mode` / `ohcodec_embed`
+两个字符串只能证明「这是打过补丁的 libmpv」，证明不了 `ohdec.c` 的 SEI 补丁在里面
+（补丁没有引入新的字符串常量）。要验证它，把 `--ohos-hdr-mode` 临时切回 `auto`
+放一段 qn=129 的 HDR Vivid 片源：补丁生效时硬解路径会产出 CUVA side data，
+`ohos_common.c` 认出来后上报 `OH_VIDEO_HDR_VIVID`；补丁不在时会落回 `hdr10`。
+这也是唯一能把「side data 产出」和「信令正确」一次验完的办法。
 
 若一行 `NativeWindow` 日志都没有，说明 `set_color` 根本没被调用，
 即 `vo` 不是 `gpu-next`，或播放器没判定当前片源为 HDR
@@ -400,17 +449,33 @@ FlutterPage({ viewId: this.viewId, xComponentColor: Color.Transparent })
 
 \* 仅当面板实测支持 Vivid（`HarmonyChannel.displaySupportsHdrVivid`）时；否则 `hdr10`。
 
-† **不能用 `auto`。** `auto` 要靠 `ohos_common.c` 从帧的 CUVA side data 认出片源，
-而默认走的是鸿蒙硬解（见下），side data 永远不会产生，`auto` 于是一路落到
-`hdr10`——原生 Vivid 反被报成 HDR10。片源类型从 qn 就已经知道，直接指定即可。
+† 仍然显式指定，不依赖 `auto`。历史原因是：`auto` 要靠 `ohos_common.c` 从帧的
+CUVA side data 认出片源，而鸿蒙硬解此前不解析 SEI，side data 永远不会产生，
+`auto` 于是一路落到 `hdr10`——原生 Vivid 反被报成 HDR10。
+**这一条已随 FFmpeg 的 `ohdec.c` 补丁修复**（见《修改内容》第 1 节），硬解路径
+现在也会产出 CUVA side data，`auto` 已经能正确认出 Vivid。但片源类型从 qn 就已经
+知道，显式指定仍然更省事、也不依赖具体 libmpv 版本，故保持现状。
 
-**没有任何一种片源能让设备自己解析动态元数据**，`--ohos-hdr-passthrough-metadata`
-已经连同转交分支一起删除。结论都在源码 / 符号表 / SDK 头文件里核对过：
+**动态元数据由 libplacebo 消费，而不是转交给合成器。** 这是两件事，
+早先的版本把它们混为一谈了：
 
-- **默认根本产不出动态元数据**：`enableHA` 默认开、`hwdec` 默认 `auto`，mpv 会
-  选中 `ohcodec`，实际解码器是 `ff_hevc_oh_decoder`——它**完全不解析 SEI**，只从
-  UNSPEC62 NAL 取杜比视界的 RPU。HDR Vivid 的 CUVA、HDR10+ 的 2094-40 side data
-  一个都不会产生。
+- **「转交给系统」确实做不到**，`--ohos-hdr-passthrough-metadata` 已连同转交分支
+  一起删除，理由见下面三条。
+- **但「被利用」一直在发生，而且是逐帧的**：杜比视界的 RPU 由 libplacebo 应用
+  （多项式 / MMR reshaping + L1 动态峰值），HDR10+ 的 ST2094-40 经
+  `mp_image.c` 的 `pl_map_hdr_metadata()` 进入 `pl_hdr_metadata`，
+  HDR Vivid 的 maxRGB 经本次新增的映射进入 CIE_Y 通道。
+  **这就是动态元数据被利用的方式**，不需要合成器参与。
+
+结论都在源码 / 符号表 / SDK 头文件里核对过：
+
+- **硬解路径此前产不出 SEI 类动态元数据**：`enableHA` 默认开、`hwdec` 默认 `auto`，
+  mpv 会选中 `ohcodec`，实际解码器是 `ff_hevc_oh_decoder`——它**完全不解析 SEI**，
+  只从 UNSPEC62 NAL 取杜比视界的 RPU。
+  **已由 `ohdec.c` 补丁修复**：现在同一批 NAL 里的前缀 SEI 也会被解析，
+  CUVA 与 2094-40 side data 都能正常产出。
+  （注意 side data「一个都产不出」的说法从来就不准确：杜比视界的 RPU 与
+  DOVI_METADATA 在硬解路径上一直是产出的。）
 - **HDR Vivid**：就算有 side data 也转交不了。FFmpeg 能解析 CUVA
   （`ff_parse_itu_t_t35_to_dynamic_hdr_vivid`），但**没有 `_to_t35`**——本地
   `libmpv.so` 符号表里只有 `av_dynamic_hdr_vivid_alloc` / `_create_side_data`，
@@ -440,13 +505,19 @@ target-peak 只是让它按 PQ 的名义峰值 10000 nit 反推目标，等于�
 
 ## 已知限制
 
-- **动态 HDR 元数据一律不转交**，`--ohos-hdr-passthrough-metadata` 已删除。
-  完整理由见上文《HDR 类型映射与色调映射标定》，简述：默认的鸿蒙硬解路径
-  （`ff_hevc_oh_decoder`）根本不解析 SEI，动态元数据 side data 一个都产不出；
-  即便产出，FFmpeg 也没有 CUVA 序列化接口，原始 T.35 字节又在解析时被丢弃；
-  而 HDR10+ 的 2094-40 载荷挂上 CUVA 标签会被**静默误解析**，比不发更糟。
-  要真正做到，需要给 FFmpeg fork 打补丁保留原始 CUVA 载荷（含硬解路径），
-  并让 libplacebo 停止色调映射，否则合成器会再映射一遍。
+- **动态 HDR 元数据不转交给合成器**（但会被 libplacebo 逐帧利用，见上文）。
+  `--ohos-hdr-passthrough-metadata` 已删除。转交做不到的理由：FFmpeg 没有 CUVA
+  的序列化接口（只有 `_to_t35` 的反向，没有正向），原始 T.35 字节在 SEI 解析时
+  被丢弃；HDR10+ 的 2094-40 载荷挂上 CUVA 标签会被**静默误解析**
+  （`application_version = 0x01` 恰好通过 CUVA 的 `system_start_code` 校验），
+  比不发更糟；而 `OH_NativeBuffer_MetadataType` 里压根没有 HDR10+ 这个类型。
+  更根本的是：`vo=gpu-next` 交给 swapchain 的已经是**做完色调映射的成品 PQ**，
+  再挂上描述原始片源的动态元数据，只会让合成器基于错误的统计量再映射一遍。
+  真要走转交路线，得先让 libplacebo 停止色调映射，而 gpu-next 没有直通路径。
+- **杜比视界 P10（AV1）不可达**：`ohdec.c` 只声明了 h264 / hevc 硬解，
+  鸿蒙侧 `preferCodecs` 也只有 HEVC / AVC，`VideoDecodeFormatType` 里没有
+  `dvav` / `dav1`。手机上 4K HDR 的 AV1 软解也不现实。P5 / P8.1 / P8.4 走的是
+  同一条 RPU 路径，不受影响。
 - 直通模式没有 mpv 的着色器、超分、tone mapping 和 VO 层字幕 / OSD 渲染，
   且只接受硬解帧。当前默认仍是 `gpu-next`；`ohcodec_embed` 已经编进去，
   可通过 `--vo` 切换验证。

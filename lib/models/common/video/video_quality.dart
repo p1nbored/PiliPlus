@@ -33,11 +33,15 @@ enum VideoQuality {
   bool get isDolbyVision => this == dolbyVision;
 
   /// Whether this quality is natively HDR Vivid, which HarmonyOS signals
-  /// directly: no remapping is needed, mpv detects the CUVA side data itself.
+  /// directly, so no remapping onto HDR10 is needed. The type is forced from
+  /// the quality rather than auto-detected: on the OHOS hardware decode path
+  /// the CUVA side data only exists once the ohdec.c prefix-SEI patch is in
+  /// the linked libmpv.
   bool get isHDRVivid => this == hdrVivid;
 
   /// Whether this quality is plain HDR10 (bilibili's qn 125). The stream may
-  /// additionally carry HDR10+ dynamic metadata, which — unlike HDR Vivid's
-  /// CUVA payload — FFmpeg can serialise back to T.35 and hand to the system.
+  /// additionally carry HDR10+ dynamic metadata; that is consumed by
+  /// libplacebo during tone mapping, never forwarded to the compositor —
+  /// OH_NativeBuffer_MetadataType has no HDR10+ value.
   bool get isHDR10 => this == hdr;
 }
