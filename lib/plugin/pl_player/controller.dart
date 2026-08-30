@@ -83,6 +83,17 @@ class PlPlayerController with BlockConfigMixin {
   final RxInt playerGeneration = 0.obs;
   final RxBool usePlatformViewRx = false.obs;
 
+  /// 渲染路径重建**完成**后自增（新播放器已经 open 好）。
+  ///
+  /// 与 [playerGeneration] 的区别很重要：[playerGeneration] 在 VideoController
+  /// 刚被替换时就自增，供 UI 尽快改挂新 controller，那时 `player.open()` 还没
+  /// 调用；这时候去设字幕轨之类的东西会被随后的 loadfile 丢掉。页面级、需要
+  /// 播放器真正就绪的重挂逻辑要订阅这一个。
+  ///
+  /// 只在 [_syncRenderPath] 里自增——正常的 setDataSource 流程有 onInit 收口，
+  /// 不需要也不应该重复触发。
+  final RxInt playerRebuilt = 0.obs;
+
   static PlPlayerController? _instance;
 
   final playerStatus = PlPlayerStatus(.playing);
@@ -466,17 +477,31 @@ class PlPlayerController with BlockConfigMixin {
   /// 所以内嵌时回退到纹理路径（几何正确但没有 HDR），全屏时才走平台视图。
   /// 没有开关：关掉平台视图等于关掉 HDR（元数据会在 Flutter 纹理那一步丢光），
   /// 所以它不是一个用户能做的取舍，跟随「启用 HDR 视频」即可。
+  /// 画中画要排除：PiP 是另一块 XComponent（FloatingPlugin 会把 Flutter 引擎
+  /// 重新 attach 上去），平台视图不会跟过去，留在平台视图路径上的结果是 PiP
+  /// 窗口里一片空白。退回纹理路径至少画面还在，只是没有 HDR。
   bool get usePlatformView =>
-      _isOhos && _isHDRPlayback && isFullScreen.value;
+      _isOhos && _isHDRPlayback && isFullScreen.value && !isPipMode;
 
   /// 当前 VideoController 实际使用的渲染路径，用于判断是否需要重建播放器。
   bool _usesPlatformView = false;
 
-  /// 目标设备的屏幕峰值亮度（nit）。杜比视界按这个值做色调映射。
+  /// 当前播放器实际带着的 `--ohos-hdr-mode`。
+  ///
+  /// 这个属性只在创建 Player 时写一次，之后改不了。两档 HDR 之间切换（例如
+  /// 杜比视界 → HDR10）渲染路径并没有变，只看 [_usesPlatformView] 会以为无事
+  /// 发生，于是新片源顶着上一档的信令上屏，类型报错。
+  String? _appliedHdrMode;
+
+  /// 色调映射用的目标屏幕峰值亮度（nit）。
   ///
   /// 鸿蒙没有公开查询面板峰值亮度的接口（`display` 只给得出支持哪些 HDR
-  /// 格式），所以这里按当前目标机型标定：SLM-W32 典型 700 nit / 峰值 1600
-  /// nit。换机型时改这里。
+  /// 格式），所以只能取一个定值。1600 是按 SLM-W32（典型 700 nit / 峰值
+  /// 1600 nit）标定的，也是目前 HDR 机型比较常见的量级。
+  ///
+  /// 只在面板确实支持 HDR 时才会用上（见 [_isHDRPlayback]）。标偏的代价是
+  /// 高光被压得多一点或少一点，不会不出画；而不给这个值的代价大得多——
+  /// libplacebo 会按 PQ 的名义峰值 10000 nit 反推，等于假设了一块亮 6 倍的屏。
   static const double _kDisplayPeakNits = 1600;
 
   /// 传给 mpv 的 `--ohos-hdr-mode`，决定向鸿蒙上报哪种 HDR 类型。
@@ -1112,10 +1137,14 @@ class PlPlayerController with BlockConfigMixin {
 
     var player = _videoPlayerController;
 
-    // 渲染路径（平台视图 / 纹理）在 VideoController 创建时就固定了，因此在
-    // HDR 与非 HDR 档位之间切换时必须重建播放器，否则切到 HDR 片源后仍然停留
-    // 在纹理路径上，HDR 依旧不会触发。
-    if (player != null && _usesPlatformView != usePlatformView) {
+    // 渲染路径（平台视图 / 纹理）和 HDR 信令都在 VideoController 创建时就固定
+    // 了，改不了。所以两者任一发生变化都必须重建播放器：
+    //  - 渲染路径变了还不重建：切到 HDR 片源后仍停在纹理路径，HDR 不会触发；
+    //  - 只有信令变了（例如杜比视界 → HDR10，两者都走平台视图）还不重建：
+    //    新片源会顶着上一档的 --ohos-hdr-mode 上屏，类型报错。
+    if (player != null &&
+        (_usesPlatformView != usePlatformView ||
+            _appliedHdrMode != ohosHdrMode)) {
       _removeListeners();
       await player.dispose();
       player = null;
@@ -1125,7 +1154,15 @@ class PlPlayerController with BlockConfigMixin {
 
     if (player == null) {
       _usesPlatformView = usePlatformView;
+      _appliedHdrMode = ohosHdrMode;
       usePlatformViewRx.value = usePlatformView;
+      if (usePlatformView) {
+        // 平台视图下 Transform.flip 不起作用（视频不由 Flutter 绘制），翻转
+        // 开关也因此不显示。留着已置位的 flipX/flipY 会变成一个用户既看不到
+        // 效果、又没有入口关掉的状态，切进来时直接清掉。
+        flipX.value = false;
+        flipY.value = false;
+      }
       player = await _initPlayer();
       if (_playerCount == 0) {
         _removeListeners();
@@ -1303,7 +1340,13 @@ class PlPlayerController with BlockConfigMixin {
       // isPipMode 是普通 bool，build 读它不产生依赖；PiP 结束时若窗口尺寸
       // 恰好没变（如画中画期间从应用栏以小窗打开 app），没有任何重建时机，
       // 页面会冻结在画中画布局。用回调驱动 pipModeRx，页面据此重建。
-      Floating().onPipModeChanged = (v) => pipModeRx.value = v;
+      Floating().onPipModeChanged = (v) {
+        pipModeRx.value = v;
+        // 画中画是另一块 XComponent，平台视图不会跟过去（PiP 窗口里一片空白），
+        // 回到应用时也要切回来。渲染路径在 VideoController 创建时固定，
+        // 只能重建播放器。
+        unawaited(_syncRenderPath());
+      };
       pipModeRx.value = Floating().isPipMode;
     }
     final stream = player.stream;
@@ -2045,18 +2088,40 @@ class PlPlayerController with BlockConfigMixin {
     }
   }
 
-  /// 渲染路径（平台视图 / 纹理）变化时重建播放器，保留进度与播放状态。
+  /// 渲染路径（平台视图 / 纹理）或 HDR 信令变化时重建播放器，
+  /// 保留进度、播放状态与倍速。
   Future<void> _syncRenderPath() async {
     if (!_isOhos) return;
     if (_videoPlayerController == null) return;
-    if (_usesPlatformView == usePlatformView) return;
+    if (_usesPlatformView == usePlatformView &&
+        _appliedHdrMode == ohosHdrMode) {
+      return;
+    }
     final wasPlaying = playerStatus.isPlaying;
-    final pos = Duration(milliseconds: positionInMilliseconds);
+    // 不能只信 state.position：open() 会把它清零，全屏切换恰好落在「新播放器
+    // 刚建好、mpv 还没上报 time-pos」的窗口里时读到的就是 0，一重建就从头播，
+    // 还会把 0 当成观看进度写回历史。position（秒）由监听器维护，可以兜底。
+    final live = positionInMilliseconds;
+    final pos = live > 0
+        ? Duration(milliseconds: live)
+        : Duration(seconds: position.value);
     try {
       await _createVideoController(dataSource, pos, null);
-      if (wasPlaying && _videoPlayerController != null) {
+      if (_videoPlayerController == null) return;
+      // 重建出来的是一个全新的 Player，倍速回到了默认值 1.0，而 UI 上的
+      // _playbackSpeed 没变——不重新应用就会「显示 2.0x，实际 1.0x」。
+      // 注意不要直接调 _initializePlayer()：它带 _autoPlay 分支，会把用户
+      // 手动暂停的视频重新播起来。
+      if (!isLive &&
+          _videoPlayerController!.state.rate != _playbackSpeed.value) {
+        await setPlaybackSpeed(_playbackSpeed.value);
+      }
+      if (wasPlaying) {
         await play();
       }
+      // 到这里新播放器已经 open 完毕，页面才能安全地重挂字幕轨、
+      // SponsorBlock 这些绑在 Player 上的东西。见 [playerRebuilt]。
+      playerRebuilt.value++;
     } catch (e) {
       debugPrint('_syncRenderPath failed: $e');
     }

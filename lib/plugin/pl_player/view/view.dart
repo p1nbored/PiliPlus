@@ -1446,7 +1446,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                 child: Obx(() {
                   // 同 _videoWidget：渲染路径切换会替换 VideoController，
                   // 订阅 generation 才能让字幕重新绑到新的 controller 上。
-                  plPlayerController.playerGeneration.value;
+                  final gen = plPlayerController.playerGeneration.value;
                   final videoController = plPlayerController.videoController;
                   if (videoController == null) {
                     return const SizedBox.shrink();
@@ -1462,6 +1462,10 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                       ),
                     ),
                     child: SubtitleView(
+                      // 同 Video：_SubtitleViewState 只在 initState 订阅
+                      // controller.player.stream.subtitle，didUpdateWidget
+                      // 不会重新订阅，所以换了 controller 必须换 State。
+                      key: ValueKey(gen),
                       controller: videoController,
                       configuration: SubtitleViewConfiguration(
                         // 去掉 SubtitleView 内部 padding，外部手动管理

@@ -80,6 +80,7 @@ import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:media_kit/media_kit.dart';
+import 'package:os_type/os_type.dart';
 import 'package:path/path.dart' as path;
 
 class VideoDetailController extends GetxController
@@ -130,6 +131,10 @@ class VideoDetailController extends GetxController
 
   final plPlayerController = PlPlayerController.getInstance()
     ..brightness.value = -1;
+
+  /// 渲染路径切换导致播放器重建后，重新绑定绑在 Player 上的东西。
+  /// 见 [onInit]。
+  Worker? _renderPathWorker;
   bool get setSystemBrightness => plPlayerController.setSystemBrightness;
   bool get removeSafeArea => plPlayerController.removeSafeArea;
   double get uiScale => plPlayerController.uiScale;
@@ -362,6 +367,28 @@ class VideoDetailController extends GetxController
   @override
   void onInit() {
     super.onInit();
+    // 鸿蒙 HDR：进出全屏 / 画中画会切换渲染路径，播放器被整体重建。字幕轨和
+    // SponsorBlock 的进度订阅都绑在旧 Player 上，重建后一起失效（字幕不再出，
+    // 片段不再跳），必须重新挂一次。
+    //
+    // 订阅的是 playerRebuilt 而不是 playerGeneration：后者在 VideoController
+    // 刚被替换时就自增，那时 `player.open()` 还没调用，这时候设的字幕轨会被
+    // 随后的 loadfile 丢掉。playerRebuilt 只在重建**完成**后自增，且只由
+    // _syncRenderPath 触发——正常 setDataSource 有 onInit 收口，不会重复。
+    if (OS.isHarmony) {
+      _renderPathWorker = ever(plPlayerController.playerRebuilt, (_) {
+        if (isClosed) return;
+        // 播放器是单例，视频页却是可以叠栈的（从相关视频点进下一个，上一页的
+        // controller 和这个 Worker 都还活着）。不加这道门，上一页会把自己的
+        // 字幕轨和 SponsorBlock 片段挂到当前页的播放器上——表现为莫名其妙的
+        // 跳播。文件里其余改动共享播放器的地方也都是这么防的。
+        if (!identical(plPlayerController.sourceOwner, this)) return;
+        setSubtitle(vttSubtitlesIndex.value);
+        if (!isFileSource && plPlayerController.enableBlock) {
+          initSkip();
+        }
+      });
+    }
     args = Get.arguments;
     videoType = args['videoType'];
     if (videoType == VideoType.pgc) {
@@ -1379,6 +1406,8 @@ class VideoDetailController extends GetxController
 
   @override
   void onClose() {
+    _renderPathWorker?.dispose();
+    _renderPathWorker = null;
     _networkScopeSub?.cancel();
     _networkScopeSub = null;
     if (identical(plPlayerController.sourceOwner, this)) {
