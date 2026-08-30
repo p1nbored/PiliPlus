@@ -444,7 +444,13 @@ class PlPlayerController with BlockConfigMixin {
 
   static final bool _isOhos = Platform.operatingSystem == 'ohos';
 
-  bool get _isHDRPlayback => enableHDR && (_hdrQuality?.isHDR ?? false);
+  /// 面板**明确**不支持任何 HDR 格式时不进 HDR 路径：既不该发 HDR 信令，也不
+  /// 该按 [_kDisplayPeakNits] 去标定一块 SDR 屏。能力未知（查询失败 / 老版本
+  /// 原生侧没有这个 method）时按支持处理，免得一次偶发失败就把 HDR 关掉。
+  bool get _isHDRPlayback =>
+      enableHDR &&
+      (_hdrQuality?.isHDR ?? false) &&
+      !HarmonyChannel.displayHasNoHdr;
 
   /// 鸿蒙上 HDR 必须走平台视图（XComponent）渲染。
   ///
@@ -493,16 +499,30 @@ class PlPlayerController with BlockConfigMixin {
   ///   类型意味着背后有 CUVA 载荷，而 HDR10+ 是 ST 2094-40，两者没有转换关系，
   ///   贴错标签只会让合成器要么丢弃要么误解析。
   String? get ohosHdrMode {
-    if (!_isOhos || !_isHDRPlayback) {
+    if (!_isOhos) {
       return null;
     }
-    final quality = _hdrQuality!;
+    final quality = _hdrQuality;
+    if (quality == null || !quality.isHDR) {
+      return null;
+    }
+    // 片源是 HDR，但用户把开关关了 / 面板明确不支持：必须显式发 `no`，
+    // **不能**返回 null。null 会让 media_kit 整个省掉这个属性，mpv 于是落回
+    // 自己的默认值 `auto`，而 auto 在 HDR 片源上照样进 HDR——「关闭」等于没关。
+    // （`no` 即 OHOS_HDR_MODE_OFF，ohos_common.c 用它关掉 allow_hdr。）
+    if (!_isHDRPlayback) {
+      return 'no';
+    }
     if (quality.isHDRVivid) {
-      return 'vivid';
+      // 原生 Vivid：片源自己带 CUVA，本来就该按 Vivid 上报。面板能力**未知**
+      // 时按支持处理，跟 [_isHDRPlayback] 一个口径——一次查询失败不该把原生
+      // Vivid 静默降级成 hdr10。只有明确查到不支持才退。
+      return HarmonyChannel.displayMaySupportHdrVivid ? 'vivid' : 'hdr10';
     }
     if (quality.isDolbyVision) {
-      // 没有开关：能不能按 Vivid 上报取决于面板支不支持，是设备能力而不是偏好，
-      // 直接按实测能力决定。
+      // 杜比视界只是**借** Vivid 这个标签让面板拉峰值亮度，自己并没有 CUVA
+      // 载荷。所以这里反过来取保守口径：没有确证支持就老实上报 hdr10。
+      // 两者都是 PQ，差别只在标签，退回去不损失画质。
       return HarmonyChannel.displaySupportsHdrVivid ? 'vivid' : 'hdr10';
     }
     return 'hdr10';

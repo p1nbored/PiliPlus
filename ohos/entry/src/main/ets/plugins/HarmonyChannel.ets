@@ -96,8 +96,10 @@ export default class HarmonyChannel implements FlutterPlugin {
           console.log(`HarmonyChannel display hdrFormats: ${JSON.stringify(formats)}`);
           result.success(formats);
         } catch (err) {
+          // 必须报错而不是回空数组：Dart 侧要用「查不到」和「查到了，不支持」
+          // 区分开，空数组会被当成这块屏确实不支持 HDR，把功能整个关掉。
           console.error(`HarmonyChannel getDisplayHdrFormats failed: ${err}`);
-          result.success([] as number[]);
+          result.error("HDR_CAPABILITY_QUERY_FAILED", `${err}`, null);
         }
         break;
       }
