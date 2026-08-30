@@ -38,6 +38,15 @@ Future<void> enterDesktopFullScreen({bool inAppFullScreen = false}) async {
 Future<void> exitDesktopFullScreen() async {
   if (_isDesktopFullScreen) {
     _isDesktopFullScreen = false;
+    // 鸿蒙 2in1：`Utils.ExitNativeFullscreen` 走 `window.recover()`，会把本来
+    // 就最大化的窗口降级成悬浮窗；而进全屏的 `maximize()` 对已最大化的窗口是
+    // 空操作。两者并非互逆，于是表现为「进全屏无变化、退出全屏变悬浮窗」。
+    //
+    // 这里只跳过退出，**不跳过进入**：`maximize()` 在窗口没最大化时是有用的
+    // （鸿蒙侧的 `HarmonyChannel.setFullScreenBars` 只管系统栏的显隐，不会改
+    // 窗口大小），一并跳掉会让窗口态下进全屏画面撑不开。代价是从非最大化窗口
+    // 进过一次全屏后窗口会留在最大化状态，比降级成悬浮窗轻得多。
+    if (OS.isHarmony) return;
     try {
       await const MethodChannel(
         'com.alexmercerind/media_kit_video',
