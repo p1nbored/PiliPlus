@@ -26,7 +26,45 @@ TextureView 做不到。`cnctem/PiliPlusX` 的 `hdr` 分支正是这样修 Andro
 `OH_VIDEO_HDR_HDR10` 或 `OH_VIDEO_HDR_HLG`，**永远不会是
 `OH_VIDEO_HDR_VIVID`**；`OH_HDR_DYNAMIC_METADATA` 完全没有设置过。
 
+## 落地顺序（先看这一节）
+
+这个特性**跨四个仓库**，应用侧的改动单独合进来是不工作的：Dart 侧写的
+`--ohos-hdr-mode` / `--target-peak` / `usePlatformView` 三个属性，分别要求
+打过补丁的 mpv、打过补丁的 media_kit 和打过补丁的 Flutter 引擎都在位。
+顺序是硬性的，不能颠倒：
+
+| # | 仓库 | 内容 | 应用侧依赖它的什么 |
+| --- | --- | --- | --- |
+| 1 | ffmpeg / mpv | `ohdec.c` 前缀 SEI、`--ohos-hdr-mode`、Vivid 上报 | `ohosHdrMode` 写下去要有人认 |
+| 2 | libmpv-ohos-build | 用 1 重新编出 `libmpv.so` | 预编译包里没有 1 的补丁 |
+| 3 | media_kit fork | `XComponent` 平台视图、`VideoControllerConfiguration` 的三个新字段 | `usePlatformView` 等字段的定义 |
+| 4 | Flutter 引擎 HAR | `configureForHybridComposition` 的真实实现 | 平台视图能不能挂进视图树 |
+| 5 | 本仓库 | 下面《修改内容》第 5 节 | —— |
+
+**第 5 步在 1–4 有公开可引用的产物之前不能合并**，原因有三条，每一条都足以
+让 CI 变红或让功能静默失效：
+
+- `pubspec.yaml` 的 `dependency_overrides` 目前指向同级目录
+  `../PiliPlus-hdr-deps/...`。这是**本机路径**，`pr_check.yml` 在干净检出上跑
+  `flutter pub get` 会直接失败，任何人克隆这个分支也一样。必须先把 media_kit
+  fork 推到可访问的远端，再把这几项换回 `git:` 形式。
+- `.github/workflows/release.yml` 克隆的是**原版** flutter-ohos SDK，没有第 4 步
+  的引擎补丁。就算前两条都解决了，发布出去的 HAP 里 hybrid composition 仍是空
+  实现，HDR 片源进全屏会得到一块空白视频区——而「启用 HDR 视频」默认是开的。
+  要么在 release 流程里加上打补丁的步骤，要么等引擎侧合入。
+- media_kit fork 里 `video_texture.dart` 无条件 `import` 了
+  `ohos_platform_video.dart`，而后者用的 `ExpensiveOhosViewController` /
+  `PlatformViewsService.initExpensiveOhosView` 只存在于鸿蒙版 Flutter。用原版
+  Flutter 编 Android / iOS / 桌面会编不过，必须先在 fork 里改成条件导入
+  （real / stub 一对，参照同目录 `ohos_video_controller.dart` 的写法）。
+
+在这些前提满足之前，本仓库这部分只适合以 **draft PR** 的形式存在。
+
 ## 修改内容
+
+> 下面的目录名是作者本机的布局（`C:\Programs\...`），换个位置也行，
+> 只要 `PiliPlus` 与 `PiliPlus-hdr-deps` **保持同级**——
+> `pubspec.yaml` 用的是 `../PiliPlus-hdr-deps/...` 相对路径。
 
 改动分布在五层，本地布局如下：
 
@@ -68,7 +106,7 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
   详见下文《HDR 类型映射》一节末尾的更正。）
 - `ohos_common.c`：检测帧上的 HDR Vivid（CUVA）side data 并上报
   `OH_VIDEO_HDR_VIVID`；新增 `--ohos-hdr-mode=auto|no|hdr10|hlg|vivid`
-  用于强制上报类型，这就是“杜比视界映射为 Vivid”的实现方式
+  用于强制上报类型。杜比视界正是靠它按 Vivid 上报的
   （DV 的 RPU 由 libplacebo 应用，画面已经是成品 PQ，差别只在信令）。
 - `mp_image.c`：把 HDR Vivid 的动态峰值接进 libplacebo 的色调映射。
   libplacebo v7.360.1 完全没有 CUVA 支持（`src/` 下 `vivid` / `cuva` 零命中），
@@ -98,11 +136,17 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
 
 ### 5. PiliPlus
 
-- `VideoQuality.isHDR` / `isDolbyVision`（对应 qn 125 / 126 / 129）。
+- `VideoQuality.isHDR` / `isDolbyVision` / `isHDRVivid`（对应 qn 125 / 126 / 129）。
 - `setDataSource(..., quality:)` 把当前画质传给播放器，播放器据此决定是否
   启用平台视图与 HDR 信令。
-- 设置项（仅鸿蒙可见）：启用 HDR 视频 / HDR 使用平台视图渲染 /
-  杜比视界映射为 HDR Vivid。
+- 设置项（仅鸿蒙可见）**只有一个**：「启用 HDR 视频」。
+  平台视图不是可选项——关掉它等于关掉 HDR（元数据会在 Flutter 纹理那一步丢光），
+  所以它跟随这个开关，不单独暴露；杜比视界按 Vivid 还是 HDR10 上报取决于面板
+  实测能力（`HarmonyChannel.displaySupportsHdrVivid`），是设备能力而不是偏好。
+- 平台视图**只在全屏时启用**。内嵌时视频只是页面的一小块，要露出它得在页面
+  各层按视频矩形抠透明洞，会波及顶栏 / 简介 / 评论等共用布局，因此内嵌一律
+  回退到纹理路径（几何正确但没有 HDR）。进出全屏、进出画中画都会因此重建
+  播放器（`_syncRenderPath`），进度、播放状态与倍速会被带过去。
 
 ## 构建
 
@@ -345,7 +389,9 @@ NativeWindow output switched to BT.2020 HLG    # HLG
 
 如果看到的是 `Failed to set NativeWindow color space: <err>` 或
 `Failed to set NativeWindow HDR metadata type`，说明 surface 不接受 HDR
-属性——通常意味着仍然走在纹理路径上（确认“HDR 使用平台视图渲染”已开启）。
+属性——通常意味着仍然走在纹理路径上。**内嵌播放时这是预期行为**（平台视图只在
+全屏启用），请先进全屏再看日志；全屏下仍然如此才说明有问题，此时确认
+「启用 HDR 视频」已开启、且面板确实支持 HDR（见下方 `getDisplayHdrFormats`）。
 
 **验证前缀 SEI 补丁是否生效（动态元数据）**：`ohos-hdr-mode` / `ohcodec_embed`
 两个字符串只能证明「这是打过补丁的 libmpv」，证明不了 `ohdec.c` 的 SEI 补丁在里面
@@ -529,6 +575,18 @@ target-peak 只是让它按 PQ 的名义峰值 10000 nit 反推目标，等于�
   `Colors.transparent`。如果外层还有不透明背景盖住播放区，视频会看不见。
 - 平台视图不参与 Flutter 命中测试（`hitTestSelf` 恒为 false），手势仍由
   播放器自己的 Flutter 层处理；视频表面上不需要原生触摸。
+- **平台视图模式下「左右翻转 / 上下翻转」不可用**，因为它们是 Flutter 侧的
+  `Transform.flip`（绘制期变换），而这一模式下视频根本不由 Flutter 绘制。
+  与其留一个点了没反应的开关，播放设置里在该模式下直接不显示这两项。
+  真要支持得下沉到 mpv 的 `vf`。
+- **画中画退回纹理路径**。PiP 是另一块 XComponent（`FloatingPlugin` 会把
+  Flutter 引擎重新 attach 上去），平台视图不会跟过去。留在平台视图上的结果是
+  PiP 窗口一片空白，所以进 PiP 时按渲染路径变化重建播放器退回纹理——
+  画面还在，只是没有 HDR；退出 PiP 再切回来。
+- **面板峰值亮度是写死的 1600 nit**（`_kDisplayPeakNits`）。鸿蒙没有查询面板
+  峰值亮度的接口，只能取定值。标偏的代价是高光被压得多一点或少一点，不会不
+  出画；不给这个值的代价大得多（libplacebo 会按 PQ 名义峰值 10000 nit 反推）。
+  面板**明确**上报不支持任何 HDR 格式时不会进 HDR 路径，也就不会用到这个值。
 - 杜比视界在鸿蒙上没有原生信令。这里的做法是让 libplacebo 应用 DV RPU 得到
   PQ 画面，再按 HDR Vivid（或 HDR10）上报。若希望从源头规避，
   可在片源选择时优先选 qn=129 的 HDR Vivid 版本。
