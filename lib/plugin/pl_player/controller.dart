@@ -1291,7 +1291,11 @@ class PlPlayerController with BlockConfigMixin {
       Media(
         dataSource.videoSource,
         start: Duration(milliseconds: positionInMilliseconds),
-        extras: audioUri == null ? null : {'audio-files': '"$audioUri"'},
+        // 不能给值加引号：extras 是在 on_load 钩子里用 mpv_set_property_string
+        // 直接写属性的（不是命令行，mpv 不会去掉外层引号），而且它在 open 之后
+        // 才生效，会盖掉上面 setProperty 写好的值——带引号等于把外挂音轨的路径
+        // 写成以 `"` 开头的文件名，音轨打不开，画面正常但没有声音。
+        extras: audioUri == null ? null : {'audio-files': audioUri},
       ),
       play: true,
     );
