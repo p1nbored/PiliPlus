@@ -73,8 +73,8 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
+import 'package:flutter/foundation.dart' show kDebugMode, clampDouble;
 import 'package:floating/floating.dart';
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
@@ -1544,7 +1544,9 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                 videoDetailCtr: videoDetailController,
                 heroTag: heroTag,
               ),
-              topInset: _harmonyFullscreenNoSafeArea ? null : _fixedTopInset,
+              // 竖屏全屏时本页保留一条 padding.top 高的黑边（SimpleAppBar），
+              // 隐藏状态栏后其高度即挖孔高度（鸿蒙见 HarmonyChannel.cutoutInsets），
+              // 播放器整体已在挖孔之下，顶部控件/弹幕不再额外下移。
               danmuWidget: isPipMode && pipNoDanmaku
                   ? null
                   : Obx(
@@ -1556,9 +1558,6 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                         isFullScreen: plPlayerController!.isFullScreen.value,
                         isFileSource: videoDetailController.isFileSource,
                         size: Size(width, height),
-                        topInset: _harmonyFullscreenNoSafeArea
-                            ? null
-                            : _fixedTopInset,
                       ),
                     ),
               showEpisodes: showEpisodes,

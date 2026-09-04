@@ -22,6 +22,7 @@ import 'package:PiliPlus/utils/calc_window_position.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/core_palettes_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
+import 'package:PiliPlus/utils/font_utils.dart';
 import 'package:PiliPlus/utils/image_memory_cleaner.dart';
 import 'package:PiliPlus/utils/json_file_handler.dart';
 import 'package:PiliPlus/utils/max_screen_size.dart';
@@ -113,6 +114,7 @@ void main() async {
     _initDownPath(),
     _initTmpPath(),
     CacheManager.ensureInitialized(),
+    ?FontUtils.init(),
   ]);
   Get
     ..lazyPut(AccountService.new)
@@ -153,7 +155,14 @@ void main() async {
   SmartDialog.config.toast = SmartConfigToast(displayType: .onlyRefresh);
 
   if (PlatformUtils.isMobile) {
-    SystemChrome.setEnabledSystemUIMode(.edgeToEdge);
+    if (OS.isHarmony) {
+      // 鸿蒙按窗口状态选系统栏模式：自由多窗下隐藏系统装饰栏（沉浸），否则
+      // edgeToEdge。必须在首帧前一次到位——先 edgeToEdge 再改会让装饰栏先
+      // 出现再收回。见 HarmonyChannel.initWindowState / _syncWindowDecor。
+      await HarmonyChannel.initWindowState();
+    } else {
+      SystemChrome.setEnabledSystemUIMode(.edgeToEdge);
+    }
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
         systemNavigationBarColor: Colors.transparent,
@@ -323,8 +332,8 @@ class MyApp extends StatelessWidget {
       scrollBehavior: OS.isHarmony
           ? const HarmonyScrollBehavior()
           : PlatformUtils.isDesktop
-              ? const CustomScrollBehavior()
-              : null,
+          ? const CustomScrollBehavior()
+          : null,
     );
   }
 
@@ -333,8 +342,13 @@ class MyApp extends StatelessWidget {
     // 均来自引擎），本方法不会因此重建，下面的缩放校正会失效、页面布局与
     // 渲染画布脱节（如平板全景多窗内点全屏后内容只占 75%、右/下露白底）。
     // 必须显式监听缩放变化触发重建。
+    // 鸿蒙挖孔避让区由原生异步上报/随旋转变化，同样不会触发根 MediaQuery
+    // 重建，一并监听。
     return ListenableBuilder(
-      listenable: ScaledWidgetsFlutterBinding.instance.scaleFactorNotifier,
+      listenable: Listenable.merge([
+        ScaledWidgetsFlutterBinding.instance.scaleFactorNotifier,
+        if (OS.isHarmony) HarmonyChannel.cutoutInsets,
+      ]),
       builder: (context, _) => _scaledBuilder(context, child),
     );
   }
@@ -355,8 +369,15 @@ class MyApp extends StatelessWidget {
     // copyWith 参数里，跟进上游 2.1.0 时 uiScale == 1.0 的分支被整体覆盖，
     // 覆盖参数被静默丢掉，手机上（uiScale 恒为 1.0）该修复完全失效。
     if (OS.isHarmony) {
+      // 鸿蒙 embedding 上报的 padding 不含摄像头挖孔（只读 TYPE_SYSTEM 避让区），
+      // 横屏时 left/right 恒为 0、竖屏隐藏状态栏后 top 归 0。此处把原生上报的
+      // TYPE_CUTOUT 避让区按边取 max 合并进来，对齐 Android 语义，下游
+      // ViewSafeArea/SafeArea 无需再区分平台。见 HarmonyChannel.cutoutInsets。
+      final dpr = mediaQuery.devicePixelRatio;
       mediaQuery = mediaQuery.copyWith(
         gestureSettings: const DeviceGestureSettings(touchSlop: 8),
+        padding: HarmonyChannel.mergeCutout(mediaQuery.padding, dpr),
+        viewPadding: HarmonyChannel.mergeCutout(mediaQuery.viewPadding, dpr),
       );
     }
     if (uiScale != 1.0) {

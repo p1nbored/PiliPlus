@@ -55,9 +55,9 @@ import 'package:cached_network_image_ce/cached_network_image.dart';
 import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:floating/floating.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:material_ui/material_ui.dart' hide PageView;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:material_ui/material_ui.dart' hide PageView;
 import 'package:os_type/os_type.dart';
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
 
@@ -290,6 +290,14 @@ class _LiveRoomPageState extends State<LiveRoomPage>
             fill: fill,
             alignment: alignment,
             plPlayerController: plPlayerController,
+            // 竖屏全屏时顶部控件/弹幕避让状态栏区域（隐藏状态栏后即摄像头
+            // 挖孔高度，鸿蒙见 HarmonyChannel.cutoutInsets）。直播页全屏时
+            // AppBar 高度为 0，没有视频页那条 padding.top 高的黑边，播放器
+            // 顶到窗口顶部，只能在播放器内部避让。受限窗口（分屏/自由多窗）
+            // 内没有状态栏，与视频页一致不避让。
+            topInset: OS.isHarmony && HarmonyChannel.isWindowMode && isFullScreen
+                ? null
+                : padding.top,
             headerControl: LiveHeaderControl(
               key: _liveRoomController.headerKey,
               title: roomInfoH5?.roomInfo?.title,
