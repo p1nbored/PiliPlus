@@ -56,12 +56,12 @@ import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:floating/floating.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart' show HapticFeedback, DeviceOrientation;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:get/get.dart';
 import 'package:hive_ce/hive.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:native_device_orientation/native_device_orientation.dart';
@@ -2044,7 +2044,7 @@ class PlPlayerController with BlockConfigMixin {
             isVertical: isVertical,
             orientation: orientation,
           );
-          if (OS.isHarmony && isManualFS) {
+          if (OS.isHarmony && !HarmonyChannel.isWindowMode) {
             // 手动进全屏的目标方向：横屏时等视口真正变横屏再置全屏布局，
             // 避免全屏先在竖屏/中间尺寸渲染，导致比例错误和动画跳变。
             final targetLandscape =
@@ -2078,6 +2078,10 @@ class PlPlayerController with BlockConfigMixin {
             const Duration(milliseconds: 500),
             onTimeout: () {},
           );
+          // 退出全屏时，延迟等待方向旋转后改变组件
+          if (OS.isHarmony && !HarmonyChannel.isWindowMode) {
+            await Future<void>.delayed(const Duration(milliseconds: 32));
+          }
         } else {
           await exitDesktopFullScreen();
         }
@@ -2258,7 +2262,12 @@ class PlPlayerController with BlockConfigMixin {
 
   void onCloseAll() {
     isCloseAll = true;
-    if (PlatformUtils.isDesktop) exitDesktopFullScreen();
+    if (PlatformUtils.isDesktop) {
+      exitDesktopFullScreen();
+    } else {
+      //规避鸿蒙悬浮窗全屏下，返回主页，方向不更新
+      triggerFullScreen(status: false);
+    }
     // dispose 已改为异步（退后台清内存），这里不阻塞路由返回
     unawaited(dispose());
     Get.until((route) => route.isFirst);

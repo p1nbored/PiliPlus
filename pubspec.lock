@@ -1212,7 +1212,7 @@ packages:
     description:
       path: "libs/ios/media_kit_libs_ios_video"
       ref: feat-ohos
-      resolved-ref: "179f7a84da27332b08818bcaab8a53b008301177"
+      resolved-ref: "762fdc6368fb95ad61ab2d99a9cf70a59a00c2e3"
       url: "https://github.com/cnoim/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1221,7 +1221,7 @@ packages:
     description:
       path: "libs/linux/media_kit_libs_linux"
       ref: feat-ohos
-      resolved-ref: "179f7a84da27332b08818bcaab8a53b008301177"
+      resolved-ref: "762fdc6368fb95ad61ab2d99a9cf70a59a00c2e3"
       url: "https://github.com/cnoim/media-kit.git"
     source: git
     version: "1.2.1"
@@ -1230,7 +1230,7 @@ packages:
     description:
       path: "libs/macos/media_kit_libs_macos_video"
       ref: feat-ohos
-      resolved-ref: "179f7a84da27332b08818bcaab8a53b008301177"
+      resolved-ref: "762fdc6368fb95ad61ab2d99a9cf70a59a00c2e3"
       url: "https://github.com/cnoim/media-kit.git"
     source: git
     version: "1.1.4"
@@ -1302,7 +1302,7 @@ packages:
     description:
       path: "."
       ref: "br_2.1.0_ohos"
-      resolved-ref: f5dd6cd869258e3beb2a96e761f908728af14316
+      resolved-ref: "74f0c9dc2495efe45cc087641ab157a3d07023d5"
       url: "https://gitcode.com/hellozeronick/fluttertpc_native_device_orientation.git"
     source: git
     version: "2.1.0"

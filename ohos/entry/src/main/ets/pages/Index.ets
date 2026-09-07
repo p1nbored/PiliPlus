@@ -1,7 +1,8 @@
-import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
+import { curves, LengthMetrics, SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { HdsAnimationMode, hdsMaterial, HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
 import common from '@ohos.app.ability.common';
+import image from '@ohos.multimedia.image';
 import window from '@ohos.window';
 import { FlutterPage } from '@ohos/flutter_ohos';
 
@@ -19,10 +20,24 @@ const EVENT_HOME_TAB_CHANGE = 'EVENT_HOME_TAB_CHANGE';
 const NAV_UNSELECTED = $r('sys.color.comp_focused_primary');
 const BOTTOM_NORMAL_AVOID_AREA_VALUE = 1;
 const BOTTOM_SPECIAL_AVOID_AREA_VALUE = 12;
-const TOP_BAR_BLUR_RADIUS = 18;
-const TOP_BAR_FRACTION_STOPS: [number, number][] = [[0, 0], [0.9, 0.08], [1, 0.4], [1, 1]];
+const TOP_BAR_BLUR_RADIUS = 15;
+const TOP_BAR_FRACTION_STOPS: [number, number][] = [[0, 0], [0.8, 0.2], [1, 0.4], [1, 1]];
 const TOP_BAR_COLLAPSED_HEIGHT = 80;
 const TOP_BAR_EXPANDED_HEIGHT = 144;
+/// 顶栏收缩曲线：重减速的三次贝塞尔，起步轻、尾段长距离滑停，
+/// 比对称的 EaseInOut 柔和。裁剪容器/内容容器/搜索行三处高度共用同一条
+/// 曲线与时长，避免各自为政导致的错位；数值需与 Flutter 侧
+/// NativeTopSpacer 的留白动画保持一致。
+const TOP_BAR_MOTION_DURATION = 300;
+const TOP_BAR_MOTION_CURVE: ICurve = curves.cubicBezierCurve(0.2, 0, 0, 1);
+/// 搜索行淡出/淡入：收起时抢在高度压扁之前淡出，展开时等高度让出空间后
+/// 再淡入，避免文字在被压扁的行内闪现（旧实现同时做，观感发硬）
+const TOP_BAR_FADE_DURATION = 120;
+const TOP_BAR_FADE_IN_DELAY = 48;
+/// 转屏动画参数
+const ROTATION_MASK_FADE_DURATION = 130;
+const ROTATION_MASK_FADE_DELAY = 75;
+const ROTATION_MASK_MAX_LIFETIME = 2000;
 
 function topBarMaterial(interactive: boolean): uiMaterial.ImmersiveMaterial {
   return new uiMaterial.ImmersiveMaterial({
@@ -101,6 +116,14 @@ struct Index {
   private sizeCallback: ((size: window.Size) => void) | null = null;
   private rectCallback: ((opts: window.RectChangeOptions) => void) | null = null;
 
+  /// 转屏旧画面遮罩
+  @State rotationMask: image.PixelMap | null = null;
+  @State rotationMaskOpacity: number = 1;
+  private rotationCallback: ((info: window.RotationChangeInfo) => void) | null = null;
+  private rotatingCount: number = 0;
+  private rotationMaskTimers: number[] = [];
+  private currentOrientation: number = 0;
+
   onHomeTabIndexChanged(): void {
     if (this.homeActiveTabIndex >= 0 && this.homeActiveTabIndex < this.homeTabs.length) {
       this.categoryCurrentIndex = this.homeActiveTabIndex;
@@ -126,6 +149,46 @@ struct Index {
     // 按窗口宽高比分流顶栏（收起/隐藏/显示）
     AppStorage.setOrCreate('winWidth', this.winWidth);
     AppStorage.setOrCreate('winHeight', this.winHeight);
+  }
+
+  /// 屏幕旋转动画：模仿安卓CROSSFADE
+  /// 旋转开始时捕获旧画面快照，新旧界面淡入淡出
+  private RotatationAnimation(w: window.Window): void {
+    try {
+      this.rotationMask = w.snapshotSync();
+      this.rotationMaskOpacity = 1;
+      this.startRotationMaskFade();
+    } catch (err) {
+      console.error(TAG, `capture rotation mask failed: ${err}`);
+      this.cleanupRotationMask();
+    }
+  }
+
+  private startRotationMaskFade(): void {
+    this.rotationMaskTimers.push(setTimeout(() => {
+      this.rotationMaskOpacity = 0;
+      this.rotationMaskTimers.push(setTimeout(() => {
+        this.cleanupRotationMask();
+      }, ROTATION_MASK_FADE_DURATION));
+    }, ROTATION_MASK_FADE_DELAY));
+    // 兜底：旋转流程异常中断时强制清理，避免遮罩残留
+    this.rotationMaskTimers.push(setTimeout(() => {
+      this.cleanupRotationMask();
+    }, ROTATION_MASK_MAX_LIFETIME));
+  }
+
+  private cleanupRotationMask(): void {
+    this.clearRotationMaskTimers();
+    if (this.rotationMask !== null) {
+      this.rotationMask.release();
+    }
+    this.rotationMask = null;
+    this.rotationMaskOpacity = 1;
+  }
+
+  private clearRotationMaskTimers(): void {
+    this.rotationMaskTimers.forEach((t: number) => clearTimeout(t));
+    this.rotationMaskTimers = [];
   }
 
   aboutToAppear(): void {
@@ -160,6 +223,28 @@ struct Index {
         console.error(TAG, `windowRectChange listener failed: ${err}`);
       }
 
+      try {
+        this.rotationCallback = (info: window.RotationChangeInfo) => {
+          if (info.type === window.RotationChangeType.WINDOW_WILL_ROTATE) {
+            this.bgColor = Color.Black;
+            this.rotatingCount++;
+            if (((info.orientation+this.currentOrientation)&1) === 1 && this.rotatingCount === 1) {
+              // 旋转角为 90° 或 270°，播放转屏动画
+              this.RotatationAnimation(w);
+            }
+          } else if (info.type === window.RotationChangeType.WINDOW_DID_ROTATE) {
+            this.currentOrientation = info.orientation;
+            this.rotatingCount--;
+            if (this.rotatingCount === 0) {
+              this.bgColor = $r("app.color.start_window_background");
+            }
+          }
+        };
+        w.on('rotationChange', this.rotationCallback);
+      } catch (err) {
+        console.error(TAG, `rotationChange listener failed: ${err}`);
+      }
+
       let windowBottomAvoidArea = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
       let uiContext = this.getUIContext();
       this.bottomAvoidAreaHeight = windowBottomAvoidArea.bottomRect.height === 0
@@ -176,9 +261,6 @@ struct Index {
     }).catch((err: Object) => {
       console.error(TAG, `getLastWindow failed: ${err}`);
     });
-    setTimeout((): void => {
-      this.bgColor = Color.Black
-    }, 3000)
   }
 
   aboutToDisappear(): void {
@@ -190,12 +272,17 @@ struct Index {
         if (this.rectCallback !== null) {
           this.win.off('windowRectChange', this.rectCallback);
         }
+        if (this.rotationCallback !== null) {
+          this.win.off('rotationChange', this.rotationCallback);
+        }
       } catch (err) {
         console.error(TAG, `off window listeners failed: ${err}`);
       }
       this.sizeCallback = null;
       this.rectCallback = null;
+      this.rotationCallback = null;
     }
+    this.clearRotationMaskTimers();
   }
 
   @Builder
@@ -340,6 +427,15 @@ struct Index {
       Column() {
       }
       .constraintSize({ maxHeight: TOP_BAR_EXPANDED_HEIGHT })
+      .linearGradient({
+          direction: GradientDirection.Bottom, // 渐变方向
+          colors: [
+                [$r('app.color.top_bar_mask_start'), 0],
+                [$r('app.color.top_bar_mask_mid'), 0.8],
+                [$r('app.color.top_bar_mask_end'), 0.95],
+                [$r('app.color.top_bar_mask_end'), 1],
+              ],
+        })
       .linearGradientBlur(TOP_BAR_BLUR_RADIUS, {
         fractionStops: TOP_BAR_FRACTION_STOPS,
         direction: GradientDirection.Top
@@ -382,13 +478,20 @@ struct Index {
           left: 14,
           right: 14,
         })
+        .opacity(this.homeHideTopBar && this.topBarCollapsed ? 0 : 1)
+        // .animation() 只作用于它之前、上一个 .animation() 之后的属性，
+        // 故透明度与高度可以各走一套节奏
+        .animation({
+          duration: TOP_BAR_FADE_DURATION,
+          curve: Curve.Sharp,
+          delay: this.homeHideTopBar && this.topBarCollapsed ? 0 : TOP_BAR_FADE_IN_DELAY
+        })
         .margin({
           top: this.homeHideTopBar && this.topBarCollapsed ? 0 : 5,
           bottom: this.homeHideTopBar && this.topBarCollapsed ? -5 : 5
         })
         .height(this.homeHideTopBar && this.topBarCollapsed ? 0 : 44)
-        .opacity(this.homeHideTopBar && this.topBarCollapsed ? 0 : 1)
-        .animation({ duration: 220, curve: Curve.EaseInOut })
+        .animation({ duration: TOP_BAR_MOTION_DURATION, curve: TOP_BAR_MOTION_CURVE })
 
         if (this.homeTabs.length > 1) {
           Tabs({ barPosition: BarPosition.Start, controller: this.categoryController }) {
@@ -415,14 +518,66 @@ struct Index {
       .hitTestBehavior(HitTestMode.Default)
       .align(Alignment.Top)
     }
-    .height(this.homeHideTopBar && this.topBarCollapsed
-      ? TOP_BAR_COLLAPSED_HEIGHT
-      : TOP_BAR_EXPANDED_HEIGHT)
-    .animation({ duration: 220, curve: Curve.EaseInOut })
+    .height(this.topBarHeight())
+    .animation({ duration: TOP_BAR_MOTION_DURATION, curve: TOP_BAR_MOTION_CURVE })
     .width('100%')
     .hitTestBehavior(HitTestMode.Default)
+    .align(Alignment.Top)
+  }
+
+  /// 沉浸式系统材质仅在 Navigation/NavDestination 标题栏或 BarPosition.End 的
+  /// 底部 TabBar 内生效（API 26 正式版起校验，超范围时日志打印
+  /// Material inactive: out of scope），故顶栏整体挂进一个只占顶栏高度的
+  /// Navigation 标题栏，内容区留空，不遮挡下方 FlutterPage。
+  ///
+  /// 关键约束：Navigation 的属性链里不得出现任何状态变量。builder 作为组件
+  /// 参数会被编译成闭包在宿主的 update 函数里传下去（见 .tabBar 的产物形态），
+  /// 一旦 Navigation 的 update 函数因读到脏状态而重跑，.title() 就会以新闭包
+  /// 再调一次，自定义标题栏整棵子树被重建——新节点没有上一帧的值可插值，
+  /// 隐式 .animation() 与 animateTo 一律退化成跳变。
+  /// 因此收缩动画与显隐一律由外层裁剪容器承担，Navigation 保持常量属性，
+  /// 标题栏内部的节点才能回到原地更新，沿用既有的 .animation() 写法。
+  @Builder
+  homeTopBarHost() {
+    Column() {
+      Navigation() {
+        // 空内容区：BarStyle.STACK 下被标题栏完全覆盖，不参与触摸测试
+        Column()
+          .width('100%')
+          .height('100%')
+          .hitTestBehavior(HitTestMode.None)
+      }
+      // 宽窗口下默认的 Auto 会分栏，强制 Stack 保持单栏标题栏布局
+      .mode(NavigationMode.Stack)
+      .hideBackButton(true)
+      .hideToolBar(true)
+      // 显式给出标题栏高度，避免自定义标题被压回默认 56vp；
+      // 不设 menus，paddingStart/paddingEnd 才能把标题栏默认左右边距清零
+      .title({ builder: this.homeTopBar, height: TOP_BAR_EXPANDED_HEIGHT }, {
+        barStyle: BarStyle.STACK,
+        paddingStart: LengthMetrics.vp(0),
+        paddingEnd: LengthMetrics.vp(0)
+      })
+      // 状态栏避让由顶栏内部的 statusBarHeight padding 负责，避免重复加一层
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP])
+      .backgroundColor(Color.Transparent)
+      .width('100%')
+      .height(TOP_BAR_EXPANDED_HEIGHT)
+    }
+    .width('100%')
+    // 收缩在这里做：普通容器高度，隐式动画正常生效；clip 让收起后露出的
+    // 那段标题栏既不绘制也不参与触摸测试，触摸照常落到下方 FlutterPage
+    .height(this.topBarHeight())
+    .clip(true)
+    .animation({ duration: TOP_BAR_MOTION_DURATION, curve: TOP_BAR_MOTION_CURVE })
     .visibility(this.topBarHidden ? Visibility.None : Visibility.Visible)
     .align(Alignment.Top)
+  }
+
+  private topBarHeight(): number {
+    return this.homeHideTopBar && this.topBarCollapsed
+      ? TOP_BAR_COLLAPSED_HEIGHT
+      : TOP_BAR_EXPANDED_HEIGHT;
   }
 
   @Builder
@@ -448,7 +603,7 @@ struct Index {
       adaptToHandedness: true,
       systemMaterialEffect: {
         materialType: hdsMaterial.MaterialType.IMMERSIVE,
-        materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
+        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
       }
     })
     .visibility(this.navTabs.length <= 1 || this.shellBarsHidden
@@ -457,6 +612,7 @@ struct Index {
     .align(Alignment.Bottom)
     .hitTestBehavior(HitTestMode.Transparent)
   }
+
 
   build() {
     Stack({ alignContent: Alignment.Top }) {
@@ -473,7 +629,22 @@ struct Index {
         this.hdsMainTabs()
       }
       if (this.useNativeTopBar && deviceInfo.sdkApiVersion >= 26) {
-        this.homeTopBar()
+        this.homeTopBarHost()
+      }
+      // 转屏遮罩
+      if (this.rotationMask !== null) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor(Color.Black)
+          .opacity(this.rotationMaskOpacity)
+          .animation({ duration: ROTATION_MASK_FADE_DURATION, curve: Curve.EaseOut })
+        Image(this.rotationMask)
+          .objectFit(ImageFit.TOP)
+          .opacity(this.rotationMaskOpacity)
+          .animation({ duration: ROTATION_MASK_FADE_DURATION, curve: Curve.EaseOut })
+          .hitTestBehavior(HitTestMode.None)
+          .syncLoad(true)
       }
     }
     .width(this.winWidth > 0 ? this.winWidth : '100%')
