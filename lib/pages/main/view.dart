@@ -524,22 +524,27 @@ class _MainAppState extends PopScopeState<MainApp>
             padding: const .only(top: 10),
             child: userAndSearchVertical(theme),
           );
-    // NavigationDrawer / NavigationRail 内部各自带一层 SafeArea，会吃掉
-    // padding.left；而它们上方的头像/消息/搜索列不在 SafeArea 内。鸿蒙横屏
-    // 挖孔避让并入 padding 后（见 HarmonyChannel.cutoutInsets），左侧有挖孔的
-    // 机型上这两组控件就一个右移一个不动，视觉错位。改为在侧栏整体上做一次
-    // 左侧避让，并移除子树里的 padding.left 避免重复避让。
+    // NavigationDrawer / NavigationRail 内部各自带一层 SafeArea：抽屉那层是
+    // SafeArea(bottom: false)，左右两侧都吃（见 SDK navigation_drawer.dart）。
+    // 而这两侧的避让本页都已经让过了——右侧由 build 里包住整个 body 的
+    // Padding(right: _padding.right) 负责，左侧由下面这层 Padding 负责（侧栏
+    // 上方的头像/消息/搜索列不在 SafeArea 内，两组控件得一起移，否则一个右移
+    // 一个不动会错位）。这里把子树里的 padding.left/right 清掉，避免二次避让：
+    // 抽屉宽度是固定的 130，右边再让一次就只剩 100 出头，页签的选中底色跟着
+    // 变窄、标签还会被 Stack 裁掉（大屏横屏且右侧有挖孔/安全区时最明显）。
     final left = MediaQuery.paddingOf(context).left;
+    final Widget child = MediaQuery.removePadding(
+      context: context,
+      removeLeft: true,
+      removeRight: true,
+      child: sideBar,
+    );
     if (left <= 0) {
-      return sideBar;
+      return child;
     }
     return Padding(
       padding: EdgeInsets.only(left: left),
-      child: MediaQuery.removePadding(
-        context: context,
-        removeLeft: true,
-        child: sideBar,
-      ),
+      child: child,
     );
   }
 

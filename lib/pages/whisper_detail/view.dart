@@ -11,7 +11,6 @@ import 'package:PiliPlus/grpc/bilibili/im/type.pb.dart' show Msg;
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/msg.dart';
 import 'package:PiliPlus/models/common/image_type.dart';
-import 'package:PiliPlus/models/common/publish_panel_type.dart';
 import 'package:PiliPlus/pages/common/publish/common_rich_text_pub_page.dart';
 import 'package:PiliPlus/pages/emote/view.dart';
 import 'package:PiliPlus/pages/whisper_detail/controller.dart';
@@ -50,7 +49,6 @@ class _WhisperDetailPageState
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
     final padding = MediaQuery.viewPaddingOf(context);
     late final containerColor = ElevationOverlay.colorWithOverlay(
       theme.colorScheme.surface,
@@ -137,9 +135,8 @@ class _WhisperDetailPageState
               ),
             ),
             if (_whisperDetailController.mid != null) ...[
-              _buildInputView(theme, containerColor),
+              _buildInputView(containerColor),
               buildPanelContainer(
-                theme,
                 containerColor,
               ),
             ] else
@@ -203,7 +200,7 @@ class _WhisperDetailPageState
             onTap: () => _whisperDetailController.sendMsg(
               message: '${item.msgKey}',
               onClearText: editController.clear,
-              msgType: 5,
+              msgType: .EN_MSG_TYPE_DRAW_BACK,
               index: index,
             ),
             child: const Text('撤回', style: TextStyle(fontSize: 14)),
@@ -245,7 +242,7 @@ class _WhisperDetailPageState
                   _whisperDetailController.sendMsg(
                     message: '${item.msgKey}',
                     onClearText: editController.clear,
-                    msgType: 5,
+                    msgType: .EN_MSG_TYPE_DRAW_BACK,
                     index: index,
                   );
                 },
@@ -264,7 +261,7 @@ class _WhisperDetailPageState
     );
   }
 
-  Widget _buildInputView(ThemeData theme, Color containerColor) {
+  Widget _buildInputView(Color containerColor) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
@@ -275,46 +272,35 @@ class _WhisperDetailPageState
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           IconButton(
-            onPressed: () => updatePanelType(
-              panelType.value == PanelType.emoji
-                  ? PanelType.keyboard
-                  : PanelType.emoji,
-            ),
+            onPressed: () =>
+                updatePanelType(panelType.value == .emoji ? .keyboard : .emoji),
             icon: const Icon(Icons.emoji_emotions),
             tooltip: '表情',
           ),
           Expanded(
-            child: Listener(
-              onPointerUp: (event) {
-                // Currently it may be emojiPanel.
-                if (readOnly.value) {
-                  updatePanelType(PanelType.keyboard);
-                }
-              },
-              child: Obx(
-                () => RichTextField(
-                  key: key,
-                  readOnly: readOnly.value,
-                  focusNode: focusNode,
-                  controller: editController,
-                  minLines: 1,
-                  maxLines: 4,
-                  onChanged: onChanged,
-                  onSubmitted: onSubmitted,
-                  textInputAction: TextInputAction.newline,
-                  decoration: InputDecoration(
-                    filled: true,
-                    hintText: '发个消息聊聊呗~',
-                    fillColor: theme.colorScheme.surface,
-                    border: const OutlineInputBorder(
-                      borderSide: BorderSide.none,
-                      borderRadius: BorderRadius.all(Radius.circular(6)),
-                      gapPadding: 0,
-                    ),
-                    contentPadding: const EdgeInsets.all(10),
+            child: Obx(
+              () => RichTextField(
+                key: key,
+                readOnly: readOnly.value,
+                focusNode: focusNode,
+                controller: editController,
+                minLines: 1,
+                maxLines: 4,
+                onChanged: onChanged,
+                onSubmitted: onSubmitted,
+                textInputAction: TextInputAction.newline,
+                decoration: InputDecoration(
+                  filled: true,
+                  hintText: '发个消息聊聊呗~',
+                  fillColor: theme.colorScheme.surface,
+                  border: const OutlineInputBorder(
+                    borderSide: BorderSide.none,
+                    borderRadius: BorderRadius.all(Radius.circular(6)),
+                    gapPadding: 0,
                   ),
-                  // inputFormatters: [LengthLimitingTextInputFormatter(500)],
+                  contentPadding: const EdgeInsets.all(10),
                 ),
+                // inputFormatters: [LengthLimitingTextInputFormatter(500)],
               ),
             ),
           ),

@@ -17,7 +17,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # update when release
-version: 2.1.2+6007
+version: 2.1.4+6061
 
 environment:
   sdk: ">=3.11.1"
@@ -59,8 +59,11 @@ dependencies:
   # 网络
   dio: 5.9.2
   cookie_jar: ^4.0.9
-  connectivity_plus: ^5.0.2
-  connectivity_plus_ohos: ^0.0.3
+  connectivity_plus: ^7.1.1
+  connectivity_plus_ohos: 
+    git:
+      url: https://github.com/HelloZeroNick/connectivity_plus_ohos.git
+      ref: main
   dio_http2_adapter: ^2.7.1
 
   # 图片
@@ -302,12 +305,12 @@ dependency_overrides:
     git:
       url: "https://gitcode.com/CPF-Flutter/flutter_inappwebview.git"
       path: "flutter_inappwebview"
-      ref: b596ae059e388cbc8f710a6c26c5370a0527a03a
+      ref: "br_v6.1.5_ohos_dev"
   flutter_inappwebview_platform_interface:
     git:
       url: "https://gitcode.com/CPF-Flutter/flutter_inappwebview.git"
       path: "flutter_inappwebview_platform_interface"
-      ref: "br_v6.1.5_ohos"
+      ref: "br_v6.1.5_ohos_dev"
   video_player: # 视频播放器.鸿蒙适配
     git:
       url: https://gitcode.com/openharmony-tpc/flutter_packages.git

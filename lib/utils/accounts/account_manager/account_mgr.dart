@@ -1,5 +1,4 @@
 // edit from package:dio_cookie_manager
-import 'dart:async';
 import 'dart:io';
 
 import 'package:PiliPlus/http/api.dart';
@@ -15,8 +14,8 @@ import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:os_type/os_type.dart';
 
 final _setCookieReg = RegExp('(?<=)(,)(?=[^;]+?=)');
@@ -24,7 +23,7 @@ final _setCookieReg = RegExp('(?<=)(,)(?=[^;]+?=)');
 class AccountManager extends Interceptor {
   AccountManager();
 
-  String blockServer = Pref.blockServer;
+  static String blockServer = Pref.blockServer;
 
   static String getCookies(List<Cookie> cookies) {
     // Sort cookies by path (longer path first).
@@ -46,7 +45,7 @@ class AccountManager extends Interceptor {
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     final path = options.path;
 
-    late final Account account = options.extra['account'] ?? _findAccount(path);
+    final account = _bindRequestAccount(options);
 
     if (account is NoAccount || _skipCookie(path)) return handler.next(options);
 
@@ -100,7 +99,7 @@ class AccountManager extends Interceptor {
                 : '';
             handler.next(options);
           })
-          .catchError((dynamic e, StackTrace s) {
+          .catchError((Object e, StackTrace s) {
             final err = DioException(
               requestOptions: options,
               error: e,
@@ -113,14 +112,9 @@ class AccountManager extends Interceptor {
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    final options = response.requestOptions;
-    final path = options.path;
-    if (options.extra['account'] is NoAccount ||
-        path.startsWith(HttpString.appBaseUrl) ||
-        _skipCookie(path)) {
-      return handler.next(response);
-    } else {
+    if (_boundRequestAccount(response.requestOptions) case final account?) {
       final future = _saveCookies(
+        account,
         response,
       ).whenComplete(() => handler.next(response));
       assert(() {
@@ -135,38 +129,40 @@ class AccountManager extends Interceptor {
         );
         return true;
       }());
+    } else {
+      return handler.next(response);
     }
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    if (err.requestOptions.responseType == ResponseType.stream) {
+    final options = err.requestOptions;
+    if (options.responseType == ResponseType.stream) {
       return handler.next(err);
     }
-    if (err.requestOptions.method != 'POST') {
-      toast(err);
+
+    if (options.method != 'POST') toast(err);
+
+    if (err.response case final res?) {
+      if (_boundRequestAccount(options) case final account?) {
+        _saveCookies(account, res).then(
+          (_) => handler.next(err),
+          onError: (Object e, StackTrace s) => handler.next(
+            DioException(
+              requestOptions: options,
+              error: e,
+              stackTrace: s,
+            ),
+          ),
+        );
+        return;
+      }
     }
-    if (err.response != null &&
-        !err.response!.requestOptions.path.startsWith(HttpString.appBaseUrl)) {
-      _saveCookies(
-        err.response!,
-      ).whenComplete(() => handler.next(err)).catchError(
-        (dynamic e, StackTrace s) {
-          final error = DioException(
-            requestOptions: err.response!.requestOptions,
-            error: e,
-            stackTrace: s,
-          );
-          handler.next(error);
-        },
-      );
-    } else {
-      handler.next(err);
-    }
+    return handler.next(err);
   }
 
   static void toast(DioException err) {
-    const List<String> skipShow = [
+    const skipShow = [
       'heartbeat',
       'history/report',
       'roomEntryAction',
@@ -180,7 +176,7 @@ class AccountManager extends Interceptor {
     ];
     String url = err.requestOptions.uri.toString();
     if (kDebugMode) debugPrint('🌹🌹ApiInterceptor: $url\n$err');
-    if (skipShow.any((i) => url.contains(i)) ||
+    if (skipShow.any(url.contains) ||
         (url.contains('skipSegments') && err.requestOptions.method == 'GET')) {
       // skip
     } else {
@@ -188,10 +184,7 @@ class AccountManager extends Interceptor {
     }
   }
 
-  Future<void> _saveCookies(Response response) async {
-    final Account account =
-        response.requestOptions.extra['account'] ??
-        _findAccount(response.requestOptions.path);
+  static Future<void> _saveCookies(Account account, Response response) async {
     final setCookies = response.headers[HttpHeaders.setCookieHeader];
     if (setCookies == null || setCookies.isEmpty) {
       return;
@@ -223,13 +216,13 @@ class AccountManager extends Interceptor {
     await account.onChange();
   }
 
-  bool _skipCookie(String path) {
+  static bool _skipCookie(String path) {
     return path.startsWith(blockServer) ||
         path.contains('hdslb.com') ||
         path.contains('biliimg.com');
   }
 
-  Account _findAccount(String path) => ApiType.loginApi.contains(path)
+  static Account _findAccount(String path) => ApiType.loginApi.contains(path)
       ? AnonymousAccount()
       : Accounts.get(
           AccountType.values.firstWhere(
@@ -237,6 +230,22 @@ class AccountManager extends Interceptor {
             orElse: () => AccountType.main,
           ),
         );
+
+  static Account _bindRequestAccount(RequestOptions options) {
+    assert(options.extra['account'] is Account?);
+    return options.extra['account'] ??= _findAccount(options.path);
+  }
+
+  static Account? _boundRequestAccount(RequestOptions options) {
+    final path = options.path;
+    final account = options.extra['account'] as Account;
+    if (account is NoAccount ||
+        path.startsWith(HttpString.appBaseUrl) ||
+        _skipCookie(path)) {
+      return null;
+    }
+    return account;
+  }
 
   static Future<String> dioError(DioException error) async {
     switch (error.type) {
@@ -259,13 +268,9 @@ class AccountManager extends Interceptor {
         try {
           // TODO 鸿蒙待适配 Connectivity Checks the connection status of the device.
           // 在 OHOS 上调用 Connectivity 可能因权限未授予而报 201，直接跳过。
-          if (OS.isHarmony) {
-            desc = '';
-          } else {
-            desc = PlatformUtils.isMobile
-                ? (await Connectivity().checkConnectivity()).desc
-                : '';
-          }
+          desc = PlatformUtils.isMobile && !OS.isHarmony
+              ? (await Connectivity().checkConnectivity()).first.desc
+              : '';
         } catch (_) {
           desc = '';
         }

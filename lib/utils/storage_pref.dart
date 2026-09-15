@@ -245,26 +245,6 @@ abstract final class Pref {
   );
 
   static List<VideoDecodeFormatType> get preferCodecs {
-    // TODO: remove next 2 version
-    if (_setting.get('defaultDecode') case String codecStr) {
-      String? codecStr2 = _setting.get('secondDecode');
-      _setting.deleteAll(const ['defaultDecode', 'secondDecode']);
-      final codecs = [
-        VideoDecodeFormatType.values.firstWhere(
-          (i) => i.codes.contains(codecStr),
-        ),
-        if (codecStr2 != null && codecStr2 != codecStr)
-          VideoDecodeFormatType.values.firstWhere(
-            (i) => i.codes.contains(codecStr2),
-          ),
-      ];
-      _setting.put(
-        SettingBoxKey.preferCodecs,
-        codecs.map((i) => i.name).toList(),
-      );
-      return codecs;
-    }
-
     final codecs = _setting.get(SettingBoxKey.preferCodecs);
     if (codecs is List) {
       return codecs.map((i) => VideoDecodeFormatType.values.byName(i)).toList();
@@ -597,8 +577,23 @@ abstract final class Pref {
     defaultValue: LiveQuality.superHD.code,
   );
 
-  static int get appFontWeight =>
-      _setting.get(SettingBoxKey.appFontWeight, defaultValue: -1);
+  /// `FontWeight.values` 的下标；`-1` 表示「跟随系统」——鸿蒙下由
+  /// [ThemeUtils.getThemeData] 读 `HarmonyChannel.systemFontWeightScale` 映射成
+  /// 具体字重（见 lib/utils/theme_utils.dart）。上游 828de30e9 把这一档去掉、
+  /// 返回值改成了 `FontWeight`，鸿蒙保留 `int` + `-1`，只跟进它的 V1→V2 键迁移。
+  static int get appFontWeight {
+    // TODO: remove next 2 version
+    const appFontWeightV1 = 'appFontWeight';
+    final int? valV1 = _setting.get(appFontWeightV1);
+    if (valV1 != null) {
+      _setting
+        ..delete(appFontWeightV1)
+        ..put(SettingBoxKey.appFontWeightV2, valV1);
+      return valV1;
+    }
+
+    return _setting.get(SettingBoxKey.appFontWeightV2, defaultValue: -1);
+  }
 
   static bool get enableDragSubtitle =>
       _setting.get(SettingBoxKey.enableDragSubtitle, defaultValue: false);
@@ -1080,4 +1075,7 @@ abstract final class Pref {
 
   static bool get enableDocProvider =>
       _setting.get(SettingBoxKey.enableDocProvider, defaultValue: false);
+
+  static bool get enableEmoteTooltip =>
+      _setting.get(SettingBoxKey.enableEmoteTooltip, defaultValue: false);
 }

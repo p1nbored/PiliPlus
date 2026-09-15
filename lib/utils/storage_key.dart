@@ -169,7 +169,8 @@ abstract final class SettingBoxKey {
       // 全屏方向旧默认值（平板 + 横屏适配 → 不改变当前方向）的一次性迁移标记
       fullScreenModeMigrated = 'fullScreenModeMigrated',
       liveStream = 'liveStream',
-      enableDocProvider = 'enableDocProvider';
+      enableDocProvider = 'enableDocProvider',
+      enableEmoteTooltip = 'enableEmoteTooltip';
 
   static const String minimizeOnExit = 'minimizeOnExit',
       windowSize = 'windowSize',
@@ -229,7 +230,7 @@ abstract final class SettingBoxKey {
 
   static const String themeMode = 'themeMode',
       defaultTextScale = 'textScale',
-      appFontWeight = 'appFontWeight',
+      appFontWeightV2 = 'appFontWeightV2',
       dynamicColor = 'dynamicColor',
       customColor = 'customColor',
       displayMode = 'displayMode',

@@ -103,7 +103,7 @@ class HomeController extends GetxController
     // ArkTS 私信点击 → 清空未读红点（同步 ArkTS）并跳转私信页
     HarmonyChannel.onTopMsgTap = () {
       Get.find<MainController>()
-        ..msgUnReadCount.value = ''
+        ..clearUnreadMsg()
         ..lastCheckUnreadAt = DateTime.now().millisecondsSinceEpoch;
       // 立即同步清空 ArkTS 原生顶栏红点
       HarmonyChannel.setHomeUnreadCount('');

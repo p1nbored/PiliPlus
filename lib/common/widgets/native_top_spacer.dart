@@ -19,16 +19,16 @@ class NativeTopSpacer extends StatelessWidget {
   const NativeTopSpacer({super.key});
 
   /// 多个分类标签时：顶栏展开/收起对应的留白高度
-  static const double expandedHeight = 123;
-  static const double collapsedHeight = 68;
+  static const double expandedHeight = 85;
+  static const double collapsedHeight = 30;
 
   /// 仅一个分类标签时：顶栏展开/收起对应的留白高度。
-  static const double singleExpandedHeight = 93;
-  static const double singleCollapsedHeight = 38;
+  static const double singleExpandedHeight = 55;
+  static const double singleCollapsedHeight = 0;
 
-  /// ArkTS 顶栏自身的高度，含状态栏，用于启用原生顶栏时调整刷新指示器高度
-  static const double barExpandedHeight = 172;
-  static const double barCollapsedHeight = 107;
+  /// ArkTS 顶栏自身的高度，用于启用原生顶栏时调整刷新指示器高度
+  static const double barExpandedHeight = 100;
+  static const double barCollapsedHeight = 32;
 
   /// 留白高度的过渡节奏，须与 Index.ets 的 TOP_BAR_MOTION_DURATION /
   /// TOP_BAR_MOTION_CURVE 一一对应：两侧不同步时，列表内容与 ArkTS 顶栏
@@ -62,10 +62,16 @@ class NativeTopSpacer extends StatelessWidget {
     if (!_active) return 0;
     final collapsed = _collapsed;
     final single = (_homeController?.tabs.length ?? 0) <= 1;
+    double topHeight = 0;
     if (single) {
-      return collapsed ? singleCollapsedHeight : singleExpandedHeight;
+      topHeight = collapsed ? singleCollapsedHeight : singleExpandedHeight;
+    } else {
+      topHeight = collapsed ? collapsedHeight : expandedHeight;
     }
-    return collapsed ? collapsedHeight : expandedHeight;
+    final view = View.of(context);
+    final statusBarHeight = view.viewPadding.top / view.devicePixelRatio;
+    // 需要加上状态栏高度
+    return max(0.0, topHeight + statusBarHeight);
   }
 
   /// 下拉刷新指示器的顶部偏移（RefreshIndicator.edgeOffset）。
@@ -73,16 +79,13 @@ class NativeTopSpacer extends StatelessWidget {
   /// 列表本身是全屏沉浸的，转圈默认贴着列表顶边（= 状态栏下沿）出现，
   /// 会被 ArkTS 顶栏整个盖住。此处把它下移到顶栏底边，转圈仍按
   /// displacement 落在「可视顶边下方」，与非沉浸页面观感一致。
-  ///
-  /// 主内容区顶部已由 Scaffold 的 AppBar(toolbarHeight: 0) 吃掉状态栏高度，
-  /// 故只需避让顶栏在状态栏以下的部分。Scaffold body 内 MediaQuery 的
-  /// padding/viewPadding 顶部均已被移除，这里直接从 View 读物理值换算。
   static double refreshEdgeOffset(BuildContext context) {
     if (!_active) return 0;
     final barHeight = _collapsed ? barCollapsedHeight : barExpandedHeight;
     final view = View.of(context);
     final statusBarHeight = view.viewPadding.top / view.devicePixelRatio;
-    return max(0.0, barHeight - statusBarHeight);
+    // 需要加上状态栏高度
+    return max(0.0, barHeight + statusBarHeight);
   }
 
   @override

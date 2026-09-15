@@ -27,6 +27,10 @@ class _FontSettingPageState extends State<FontSettingPage> {
   AppFont _appFont = FontUtils.appFont;
   String? get _selectedFont => _appFont.fontFamily;
 
+  // ignore: deprecated_member_use
+  static final _normalFontWeight = FontWeight.normal.index;
+
+  /// `-1` = 跟随系统字重（鸿蒙保留的一档，见 [Pref.appFontWeight]）
   int _selectedWeight = Pref.appFontWeight;
   double _selectedScale = Pref.defaultTextScale;
 
@@ -78,7 +82,7 @@ class _FontSettingPageState extends State<FontSettingPage> {
 
     await GStorage.setting.putAllNE({
       SettingBoxKey.appFont: _selectedFont,
-      SettingBoxKey.appFontWeight: _selectedWeight,
+      SettingBoxKey.appFontWeightV2: _selectedWeight,
       SettingBoxKey.defaultTextScale: _selectedScale,
     });
 
@@ -311,7 +315,7 @@ class _FontSettingPageState extends State<FontSettingPage> {
                           child: Text.rich(
                             TextSpan(
                               children: [
-                                TextSpan(text: '默认/\n'),
+                                TextSpan(text: '跟随系统/\n'),
                                 TextSpan(
                                   text: 'w100',
                                   style: TextStyle(fontWeight: .w100),
@@ -327,8 +331,9 @@ class _FontSettingPageState extends State<FontSettingPage> {
                             min: -1,
                             max: 8,
                             divisions: 9,
+                            secondaryTrackValue: _normalFontWeight.toDouble(),
                             label: _selectedWeight == -1
-                                ? '默认'
+                                ? '跟随系统'
                                 : 'w${(_selectedWeight + 1) * 100}',
                             onChanged: (value) {
                               setState(() => _selectedWeight = value.toInt());
