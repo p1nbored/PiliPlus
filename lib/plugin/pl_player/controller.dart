@@ -33,6 +33,7 @@ import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/platform_video_backdrop.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
@@ -82,6 +83,15 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// controller（画面全黑、按钮卡死）。用下面两个 Rx 把替换广播出去。
   final RxInt playerGeneration = 0.obs;
   final RxBool usePlatformViewRx = false.obs;
+
+  /// [usePlatformViewRx] 的唯一写入口，同时把平台视图状态同步给 ArkTS
+  /// （Index.ets 根 Stack 据此把黑边涂黑）。见 [PlatformVideoBackdrop]。
+  late final PlatformVideoBackdrop _platformVideoBackdrop =
+      PlatformVideoBackdrop(
+        rx: usePlatformViewRx,
+        enabled: _isOhos,
+        isAlive: () => _playerCount > 0,
+      );
 
   /// 渲染路径重建**完成**后自增（新播放器已经 open 好）。
   ///
@@ -1150,7 +1160,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (player == null) {
       _usesPlatformView = usePlatformView;
       _appliedHdrMode = ohosHdrMode;
-      usePlatformViewRx.value = usePlatformView;
+      // 唯一写入口：顺带同步给 ArkTS，平台视图模式下根 Stack 才会是黑的。
+      // 不要改成 await，原因见 PlatformVideoBackdrop.update。
+      _platformVideoBackdrop.update(usePlatformView);
       if (usePlatformView) {
         // 平台视图下 Transform.flip 不起作用（视频不由 Flutter 绘制），翻转
         // 开关也因此不显示。留着已置位的 flipX/flipY 会变成一个用户既看不到
@@ -2260,6 +2272,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
 
     _playerCount = 0;
+    // 必须紧跟 _playerCount 清零、在第一个 await 之前：此后迟到的
+    // _syncRenderPath 因 _playerCount == 0 不会再发 true，这里的 false 就是最终值。
+    _platformVideoBackdrop.reset();
     if (removeSafeArea) {
       showSystemBar();
     }

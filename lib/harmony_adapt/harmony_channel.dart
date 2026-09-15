@@ -341,6 +341,19 @@ abstract class HarmonyChannel {
   static Future<void> setFullScreenBars(bool fullscreen) =>
       _invoke('setFullScreenBars', {'fullscreen': fullscreen});
 
+  /// HDR 平台视图模式开关：Flutter 播放器各层是否已画透明。
+  ///
+  /// 平台视图只有拟合后的视频矩形那么大，矩形以外的黑边会透到 `Index.ets` 的
+  /// 根 Stack，ArkTS 据此在该模式期间把根 Stack 涂黑（见 `PlatformVideoBackdrop`）。
+  /// 吞掉所有异常（含 MissingPluginException，`_invoke` 只吞 PlatformException）：
+  /// 这只是背景色信号，失败最多露白边，不能影响播放器创建。
+  static Future<void> setPlatformVideoActive(bool active) async {
+    if (!OS.isHarmony) return;
+    try {
+      await _channel.invokeMethod('setPlatformVideoActive', {'active': active});
+    } catch (_) {}
+  }
+
   /// 鸿蒙部分机型（Mate80）开启系统旋转锁定后无法强制窗口转回竖屏，这里走原生接口。
   static Future<void> setWindowOrientation(int orientation) async {
     if (!OS.isHarmony) return;

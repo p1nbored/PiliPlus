@@ -487,6 +487,18 @@ FlutterPage({ viewId: this.viewId, xComponentColor: Color.Transparent })
 场景：Flutter 自身画面是不透明的，透明的只有它主动画透明的区域（即平台视图模式
 下的视频区）。代价仅是首帧前/窗口尺寸变化的瞬间，露出的是窗口背景而不是黑色。
 
+另外，平台视图只有拟合后的视频矩形那么大（`_RenderOhosPlatformVideoGeometry`
+按 `getTransformTo(null)` 上报几何），`MediaKitVideoPlatformView` 的黑底也只盖
+这一块。黑边处 Flutter 各层都是透明的，透出来的是 `Index.ets` 的根 Stack。
+根 Stack 平时是启动背景色（浅色主题为白色），又不能常黑（上游 2c4e56a98
+「一镜到底动画播放时右侧出现黑块」去掉了 3s 转黑），所以由 Dart 侧
+`PlatformVideoBackdrop` 在 `usePlatformViewRx` 为 true 期间经
+`setPlatformVideoActive` 通知 ArkTS（`AppStorage` 的 `platformVideoActive`）
+把根 Stack 涂黑：进入时先涂黑再透明，退出时先恢复不透明、下一帧再恢复底色；
+播放器 dispose 时同步清零，`EntryAbility.onCreate` 也会清零。
+已知残留：退出全屏后、旧播放器 dispose 完成前立刻返回，若开启了一镜到底动画，
+返回动画期间右侧那条会是黑的。
+
 ### HDR 类型映射与色调映射标定（已按源码核对）
 
 | 片源 | qn | `--ohos-hdr-mode` | `--target-peak` | 谁做色调映射 |

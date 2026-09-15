@@ -519,6 +519,14 @@ export default class HarmonyChannel implements FlutterPlugin {
         result.success(true);
         break;
       }
+      case "setPlatformVideoActive": {
+        // HDR 平台视图模式：Flutter 播放器各层画透明，视频矩形以外的黑边会透到
+        // Index.ets 的根 Stack，由它据此涂黑。与沉浸光感无关，不做 API 版本限制。
+        const active: boolean = call.argument('active') ?? false;
+        AppStorage.setOrCreate('platformVideoActive', active);
+        result.success(true);
+        break;
+      }
       case "setSystemColorMode": {
         const colorMode: string = call.argument('colorMode') ?? '';
         this.setColorMode(colorMode);

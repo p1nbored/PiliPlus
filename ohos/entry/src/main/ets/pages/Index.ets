@@ -113,6 +113,9 @@ struct Index {
   @State winHeight: number = 0;
   @State bottomAvoidAreaHeight: number = 0;
   @State bgColor: ResourceColor = $r("app.color.start_window_background")
+  /// HDR 平台视图模式（Dart 侧 usePlatformViewRx）期间根 Stack 必须是黑的，
+  /// 见 build() 末尾。只读，由 HarmonyChannel 的 setPlatformVideoActive 写入。
+  @StorageProp('platformVideoActive') platformVideoActive: boolean = false;
 
   private categoryController: TabsController = new TabsController();
   private controller: HdsTabsController = new HdsTabsController();
@@ -879,10 +882,13 @@ struct Index {
     }
     .width(this.winWidth > 0 ? this.winWidth : '100%')
     .height(this.winHeight > 0 ? this.winHeight : '100%')
-    // 平台视图（HDR）合成在 Flutter 表面之下，视频没铺满的部分（黑边）会一路
-    // 透到这个根 Stack，所以它必须是黑的。bgColor 初值为启动背景色，
-    // aboutToAppear 里 3s 后转黑——沿用上游行为，避免冷启动白闪。
-    .backgroundColor(this.bgColor)
+    // 平台视图（HDR）合成在 Flutter 表面之下，且只有拟合后的视频矩形那么大；
+    // 该模式下 Flutter 播放器各层画透明，视频没铺满的部分（黑边）会一路透到
+    // 这个根 Stack，所以此期间必须是黑的（platformVideoActive，由 Dart 同步）。
+    // 不能常黑：上游 2c4e56a98 为修「一镜到底动画右侧黑块」去掉了 3s 转黑。
+    // 平时沿用 bgColor（启动背景色，仅转屏期间为黑），也避免冷启动白闪。
+    // rotationChange / onPageShow 只改 bgColor，不会把这里的黑色冲掉。
+    .backgroundColor(this.platformVideoActive ? Color.Black : this.bgColor)
   }
 
   onBackPress(): boolean {
