@@ -27,6 +27,8 @@ abstract final class SettingBoxKey {
       hardwareDecoding = 'hardwareDecoding',
       // HDR 输出（鸿蒙）
       enableHDR = 'enableHDR',
+      // HDR 色调映射用的面板峰值亮度（鸿蒙，nit）
+      hdrPeakNits = 'hdrPeakNits',
       videoSync = 'videoSync',
       autosync = 'autosync',
       p1080 = 'p1080',

@@ -458,7 +458,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   static final bool _isOhos = Platform.operatingSystem == 'ohos';
 
   /// 面板**明确**不支持任何 HDR 格式时不进 HDR 路径：既不该发 HDR 信令，也不
-  /// 该按 [_kDisplayPeakNits] 去标定一块 SDR 屏。能力未知（查询失败 / 老版本
+  /// 该按 [_displayPeakNits] 去标定一块 SDR 屏。能力未知（查询失败 / 老版本
   /// 原生侧没有这个 method）时按支持处理，免得一次偶发失败就把 HDR 关掉。
   bool get _isHDRPlayback =>
       enableHDR &&
@@ -495,16 +495,17 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 发生，于是新片源顶着上一档的信令上屏，类型报错。
   String? _appliedHdrMode;
 
-  /// 色调映射用的目标屏幕峰值亮度（nit）。
+  /// 色调映射用的目标屏幕峰值亮度（nit），取自设置「HDR 峰值亮度」。
   ///
   /// 鸿蒙没有公开查询面板峰值亮度的接口（`display` 只给得出支持哪些 HDR
-  /// 格式），所以只能取一个定值。1600 是按 SLM-W32（典型 700 nit / 峰值
-  /// 1600 nit）标定的，也是目前 HDR 机型比较常见的量级。
+  /// 格式），所以由用户按屏幕参数填写，默认 1600（按 SLM-W32 标定）。
+  /// 它随 VideoController 的配置一起下发，只在创建播放器时读取：改了设置从
+  /// 下一次重建播放器（重新打开视频，或 HDR 片源进出全屏）起生效。
   ///
   /// 只在面板确实支持 HDR 时才会用上（见 [_isHDRPlayback]）。标偏的代价是
   /// 高光被压得多一点或少一点，不会不出画；而不给这个值的代价大得多——
   /// libplacebo 会按 PQ 的名义峰值 10000 nit 反推，等于假设了一块亮 6 倍的屏。
-  static const double _kDisplayPeakNits = 1600;
+  static double get _displayPeakNits => Pref.hdrPeakNits.toDouble();
 
   /// 传给 mpv 的 `--ohos-hdr-mode`，决定向鸿蒙上报哪种 HDR 类型。
   ///
@@ -561,7 +562,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 按输出色彩空间反推目标峰值——PQ 的名义峰值是 10000 nit，等于假设了一块比
   /// 实际亮 6 倍多的屏幕，高光会被无谓地压暗。
   double? get ohosHdrTargetPeak =>
-      _isOhos && _isHDRPlayback ? _kDisplayPeakNits : null;
+      _isOhos && _isHDRPlayback ? _displayPeakNits : null;
 
   late final progressType = Pref.btmProgressBehavior;
   late final enableQuickDouble = Pref.enableQuickDouble;

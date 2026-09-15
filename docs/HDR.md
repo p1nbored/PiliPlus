@@ -139,10 +139,12 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
 - `VideoQuality.isHDR` / `isDolbyVision` / `isHDRVivid`（对应 qn 125 / 126 / 129）。
 - `setDataSource(..., quality:)` 把当前画质传给播放器，播放器据此决定是否
   启用平台视图与 HDR 信令。
-- 设置项（仅鸿蒙可见）**只有一个**：「启用 HDR 视频」。
+- 设置项（仅鸿蒙可见）有两个：「启用 HDR 视频」与「HDR 峰值亮度」。
   平台视图不是可选项——关掉它等于关掉 HDR（元数据会在 Flutter 纹理那一步丢光），
-  所以它跟随这个开关，不单独暴露；杜比视界按 Vivid 还是 HDR10 上报取决于面板
+  所以它跟随「启用 HDR 视频」，不单独暴露；杜比视界按 Vivid 还是 HDR10 上报取决于面板
   实测能力（`HarmonyChannel.displaySupportsHdrVivid`），是设备能力而不是偏好。
+  「HDR 峰值亮度」是 `--target-peak` 的取值：鸿蒙读不到面板峰值亮度，只能由用户按
+  屏幕参数填写（200–10000 nit，默认 1600），见下文《HDR 类型映射与色调映射标定》。
 - 平台视图**只在全屏时启用**。内嵌时视频只是页面的一小块，要露出它得在页面
   各层按视频矩形抠透明洞，会波及顶栏 / 简介 / 评论等共用布局，因此内嵌一律
   回退到纹理路径（几何正确但没有 HDR）。进出全屏、进出画中画都会因此重建
@@ -489,9 +491,9 @@ FlutterPage({ viewId: this.viewId, xComponentColor: Color.Transparent })
 
 | 片源 | qn | `--ohos-hdr-mode` | `--target-peak` | 谁做色调映射 |
 | --- | --- | --- | --- | --- |
-| HDR Vivid（原生） | 129 | `vivid`† | 1600 | libplacebo |
-| 杜比视界 | 126 | `vivid`* | 1600 | libplacebo |
-| HDR10 / HDR10+ | 125 | `hdr10` | 1600 | libplacebo |
+| HDR Vivid（原生） | 129 | `vivid`† | 设置值（默认 1600） | libplacebo |
+| 杜比视界 | 126 | `vivid`* | 设置值（默认 1600） | libplacebo |
+| HDR10 / HDR10+ | 125 | `hdr10` | 设置值（默认 1600） | libplacebo |
 
 \* 仅当面板实测支持 Vivid（`HarmonyChannel.displaySupportsHdrVivid`）时；否则 `hdr10`。
 
@@ -540,8 +542,10 @@ CUVA side data 认出片源，而鸿蒙硬解此前不解析 SEI，side data 永
 **`--target-peak` 所有 HDR 片源都要给。** 之前以为原生 Vivid 是「直通」所以不该给，
 那是错的：`vo=gpu-next` 一定会跑完整的 libplacebo 渲染，没有直通路径。不给
 target-peak 只是让它按 PQ 的名义峰值 10000 nit 反推目标，等于假设了一块比实际亮
-6 倍多的屏幕。目标机型标定值 `_kDisplayPeakNits = 1600`（SLM-W32，典型 700 nit /
-峰值 1600 nit）；鸿蒙没有查询面板峰值亮度的接口，所以按机型写死。
+6 倍多的屏幕。取值来自设置「HDR 峰值亮度」（`Pref.hdrPeakNits`，200–10000 nit），
+默认 1600，按 SLM-W32（典型 700 nit / 峰值 1600 nit）标定；鸿蒙没有查询面板峰值
+亮度的接口，只能由用户按屏幕参数填写。它随 VideoController 的配置在创建播放器时
+下发，改了设置从下一次重建播放器（重新打开视频，或 HDR 片源进出全屏）起生效。
 
 > **`vo=ohcodec_embed` 不是「完整动态元数据」的出路，恰恰相反。**
 > `vo_ohcodec_embed.c` 从不调用 `vo_ohos_set_color` / `vo_ohos_set_frame`，
@@ -583,9 +587,9 @@ target-peak 只是让它按 PQ 的名义峰值 10000 nit 反推目标，等于�
   Flutter 引擎重新 attach 上去），平台视图不会跟过去。留在平台视图上的结果是
   PiP 窗口一片空白，所以进 PiP 时按渲染路径变化重建播放器退回纹理——
   画面还在，只是没有 HDR；退出 PiP 再切回来。
-- **面板峰值亮度是写死的 1600 nit**（`_kDisplayPeakNits`）。鸿蒙没有查询面板
-  峰值亮度的接口，只能取定值。标偏的代价是高光被压得多一点或少一点，不会不
-  出画；不给这个值的代价大得多（libplacebo 会按 PQ 名义峰值 10000 nit 反推）。
+- **面板峰值亮度要手动填写**（设置「HDR 峰值亮度」，默认 1600 nit）。鸿蒙没有
+  查询面板峰值亮度的接口，读不到实际值。标偏的代价是高光被压得多一点或少一点，
+  不会不出画；不给这个值的代价大得多（libplacebo 会按 PQ 名义峰值 10000 nit 反推）。
   面板**明确**上报不支持任何 HDR 格式时不会进 HDR 路径，也就不会用到这个值。
 - 杜比视界在鸿蒙上没有原生信令。这里的做法是让 libplacebo 应用 DV RPU 得到
   PQ 画面，再按 HDR Vivid（或 HDR10）上报。若希望从源头规避，
