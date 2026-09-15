@@ -13,12 +13,13 @@ import 'package:get/get.dart';
 /// 根 Stack 平时是启动背景色（浅色主题为白），又不能常黑（上游 2c4e56a98：
 /// 一镜到底动画右侧黑块），所以只在 [rx] 为 true 期间通知 ArkTS 把它涂黑。
 ///
-/// 两个方向都按「不闪白」排序：
+/// 各方向都按「不闪白」排序：
 ///  - 进入：先发 true 再置 [rx]。平台消息在调用时就同步发出，先于 [rx] 触发的
 ///    那一帧。这里**不能** await：调用方正处在 `_usesPlatformView` 赋值与
 ///    `_initPlayer()` 之间，插一个 await，全屏状态就可能在这期间变化，
 ///    播放器的真实配置与 `_usesPlatformView` 对不上。
 ///  - 退出：先置 [rx] 让 Flutter 恢复不透明，等这一帧出去再发 false。
+///  - 销毁：[reset] 先置 [rx] 再同步发 false，两者在同一个同步段内完成。
 ///
 /// [isAlive] 为 false（播放器已 dispose）时不再发 true：dispose 已经通过
 /// [reset] 发过 false，迟到的重建流程若再发 true，根 Stack 会一直黑到下一个
@@ -43,7 +44,7 @@ class PlatformVideoBackdrop {
 
   static Future<void> _endOfFrame() => SchedulerBinding.instance.endOfFrame;
 
-  /// 渲染路径确定后调用，是 [rx] 唯一的写入口。
+  /// 渲染路径确定后调用，是 [rx] 在播放期间唯一的写入口。
   void update(bool value) {
     if (!enabled) {
       rx.value = value;
@@ -67,8 +68,14 @@ class PlatformVideoBackdrop {
     await _send(false);
   }
 
-  /// 播放器彻底销毁时调用：同步发出，不等帧，也不看 [isAlive]。
+  /// 播放器彻底销毁时调用：先置 [rx] 让 Flutter 恢复不透明，再同步发出 false。
+  ///
+  /// 不等帧，也不看 [isAlive]：之后迟到的 [update] 因 [isAlive] 为 false 不会
+  /// 再发 true，这里的 false 就是最终值。先清 [rx] 是为了「全屏状态下直接
+  /// dispose」的路径（例如全屏里点返回主页走 onCloseAll）：否则 Flutter 各层
+  /// 仍是透明的，根 Stack 却已恢复为白色，退出途中会闪白边。
   void reset() {
+    rx.value = false;
     if (!enabled) return;
     unawaited(_send(false));
   }

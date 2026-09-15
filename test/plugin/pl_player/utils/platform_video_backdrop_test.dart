@@ -87,4 +87,14 @@ void main() {
     await flush();
     expect(sent, ['true@rx=false', 'false@rx=false']);
   });
+
+  // 返回主页（onCloseAll）会在全屏状态下直接 dispose：若只发 false 而 rx 仍为
+  // true，Flutter 各层还是透明的，根 Stack 却已恢复为白色，退出途中闪白边。
+  test('reset makes Flutter opaque before restoring the root', () {
+    create()
+      ..update(true)
+      ..reset();
+    expect(rx.value, isFalse);
+    expect(sent, ['true@rx=false', 'false@rx=false']);
+  });
 }
