@@ -6,7 +6,6 @@ abstract final class SettingBoxKey {
       showActualVolume = 'showActualVolume',
       enableHdsBar = 'enableHdsBar',
       enableHdsTopBar = 'enableHdsTopBar',
-      useBuiltInFont = 'useBuiltInFont',
       enableHeroCoverAnimation = 'enableHeroCoverAnimation';
 
   static const String btmProgressBehavior = 'btmProgressBehavior',
@@ -107,7 +106,6 @@ abstract final class SettingBoxKey {
       banWordForZone = 'banWordForZone',
       savedRcmdTip = 'savedRcmdTip',
       openInBrowser = 'openInBrowser',
-      refreshDragPercentage = 'refreshDragPercentage',
       refreshDisplacement = 'refreshDisplacement',
       showHotRcmd = 'showHotRcmd',
       audioNormalization = 'audioNormalization',
