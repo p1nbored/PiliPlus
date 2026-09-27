@@ -467,6 +467,15 @@ private configureForHybridComposition(platformView, request): void {
 输入交回 Flutter（引擎只注入、不调用，必须由插件自己转发）。回归测试见
 `test/plugin/pl_player/ohos_platform_video_test.dart`。
 
+**HCPP 下还必须钉住渲染尺寸**。图层带缩放时（视频布局在源分辨率、再被两层
+`FittedBox` 缩小），HCPP 不按屏幕上的外接矩形给节点定尺寸，而是用未缩放尺寸 ×
+dpr 建节点、再 `.scale()` 缩回去——4K 片源的 XComponent 约 13440×7560 px。平台视图
+路径原先不设 `--ohos-surface-size`，mpv 回读的就是这个窗口尺寸，而系统对 buffer
+每个轴各自截到 4096，宽高比就此失真，mpv 在失真的 buffer 里加黑边，合成器再把它拉回
+视图比例——画面被上下压扁。现在两条路径都设 `--ohos-surface-size`（与纹理路径一样
+先按 4096 等比缩），mpv 自己 `SET_BUFFER_GEOMETRY`，buffer 与视频同比例，由合成器
+缩放进视图；改这个选项会触发 `VOCTRL_EXTERNAL_RESIZE`，切画质时也会重新钉住。
+
 下一节的 `xComponentColor`、`PlatformVideoBackdrop` 和全屏 Scaffold 透明等处理
 针对的是旧层级（视频在 Flutter 之下）。HCPP 下视频在 Flutter 主表面之上，这些
 透明化不再是必需的；暂时保留（黑边仍透出涂黑的根 Stack），是否移除等真机验证后再定。
