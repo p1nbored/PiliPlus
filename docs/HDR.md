@@ -38,7 +38,7 @@ TextureView 做不到。`cnctem/PiliPlusX` 的 `hdr` 分支正是这样修 Andro
 | 1 | ffmpeg / mpv | `ohdec.c` 前缀 SEI、`--ohos-hdr-mode`、Vivid 上报 | `ohosHdrMode` 写下去要有人认 |
 | 2 | libmpv-ohos-build | 用 1 重新编出 `libmpv.so` | 预编译包里没有 1 的补丁 |
 | 3 | media_kit fork | `XComponent` 平台视图、`VideoControllerConfiguration` 的三个新字段 | `usePlatformView` 等字段的定义 |
-| 4 | Flutter 引擎 HAR | `configureForHybridComposition` 的真实实现 | 平台视图能不能挂进视图树 |
+| 4 | Flutter 引擎 HAR | `configureForHybridComposition` 的真实实现（3.44.9 起由引擎自带的 HCPP 取代，不再需要） | 平台视图能不能挂进视图树 |
 | 5 | 本仓库 | 下面《修改内容》第 5 节 | —— |
 
 **第 5 步在 1–4 有公开可引用的产物之前不能合并**，原因有三条，每一条都足以
@@ -121,13 +121,19 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
 - 新增 `MediaKitVideoPlatformView.ets`：用 `XComponent` 承载视频的
   `PlatformView` + 工厂，并把 surfaceId 通过 method channel 交给 Dart。
 - 新增 `OhosPlatformVideo` widget：用
-  `PlatformViewsService.initExpensiveOhosView` 创建平台视图，走
-  **hybrid composition**（`NodeRenderType.RENDER_TYPE_DISPLAY`），
-  由 RenderService 直接合成，HDR 元数据得以保留。
+  `PlatformViewsService.initExpensiveOhosView` 创建平台视图，经
+  `OhosViewSurface` 放进 layer tree，由引擎的 **hybrid composition（HCPP）**
+  按每帧的 `PlatformViewLayer` 摆放（`NodeRenderType.RENDER_TYPE_DISPLAY`），
+  由 RenderService 直接合成，HDR 元数据得以保留。落在视频上的触摸 / 滚轮由
+  XComponent 交回 Flutter。
 - `VideoControllerConfiguration` 新增 `usePlatformView` 与 `ohosHdrMode`。
   默认仍走原来的纹理路径，不影响其他平台。
 
-### 4. Flutter 引擎（HAR 补丁）
+### 4. Flutter 引擎（HAR 补丁，仅 3.41.9 及更早）
+
+> Flutter 3.44.9-ohos 起引擎自带 hybrid composition（HCPP），由
+> `buildinfo.json5` 的 `enable_ohos_hybrid_composition` 开启（上游
+> 2.1.4-ohos-2 已开），本节补丁不再需要，见下文《Flutter 3.44.9：改走引擎自带的 HCPP》。
 
 - 实现 `PlatformViewsController.configureForHybridComposition`，用
   `NodeRenderType.RENDER_TYPE_DISPLAY` 建节点并挂进视图树——这是让 surface
@@ -155,7 +161,7 @@ C:\Programs\PiliPlus-hdr-deps\flutter-ohos-engine   引擎 HAR 补丁 + 应用�
 ### 第一步：安装鸿蒙版 Flutter SDK
 
 ```powershell
-git clone -b oh-3.41.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git C:\flutter
+git clone -b oh-3.44.9-dev https://gitcode.com/CPF-Flutter/flutter_flutter.git C:\flutter
 ```
 
 ### 第二步：配置环境变量
@@ -175,18 +181,17 @@ $p = [Environment]::GetEnvironmentVariable("PATH","User")
 
 重开终端后用 `flutter doctor -v`、`flutter devices` 确认。
 
-### 第三步：给 Flutter 引擎打补丁（必须）
+### 第三步：确认 HCPP 已开启（3.44.9 起不再给引擎打补丁）
 
-预编译引擎里 hybrid composition 是空实现，不打补丁平台视图不会显示。
-HAR 内是未混淆的 ArkTS 源码，解包打补丁再打包即可，不需要编译引擎。
-在 Git Bash 里执行：
+3.44.9-ohos 的引擎自带 hybrid composition（HCPP），只要
+`ohos/entry/src/main/resources/rawfile/buildinfo.json5` 里
+`enable_ohos_hybrid_composition` 为 `true`（上游已开）。关掉它，平台视图只会被
+创建、不会被合成，全屏 HDR 同样是黑屏。
 
-```bash
-cd /c/Programs/PiliPlus-hdr-deps/flutter-ohos-engine
-./apply-engine-patch.sh /c/flutter          # 还原用 --revert
-```
-
-脚本会自动备份 `*.har.orig`，可重复执行。细节见该目录下的 README。
+**不要对 3.44 的 SDK 执行 `apply-engine-patch.sh`**：补丁针对的是 3.41.9 的
+`PlatformViewsController.ets`，而且脚本每次都先从 `*.har.orig` 还原——那些备份
+是 3.41.9 的 HAR，等于把旧引擎的 ArkTS 塞进新引擎。仍在用 3.41.9 的话，按
+`PiliPlus-hdr-deps/flutter-ohos-engine` 的 README 打补丁。
 
 ### 第四步：重新编译 libmpv（必须）
 
@@ -441,6 +446,31 @@ private configureForHybridComposition(platformView, request): void {
 肉眼判断：进入 HDR 后屏幕峰值亮度会明显抬升（尤其高光部分），
 而不只是整体画面变亮。
 
+### Flutter 3.44.9：改走引擎自带的 HCPP
+
+上游 2.1.4-ohos-2 迁到 Flutter 3.44.9-ohos，并在 `buildinfo.json5` 里开启了
+`enable_ohos_hybrid_composition`。此后 `initExpensiveOhosView` 的请求交给引擎新增的
+`PlatformViewsControllerHybrid`，上面那套补丁路径不再经过。HCPP 的约定与安卓一致：
+
+- 视图创建时 `opacity` 为 0，尺寸取自创建请求（框架会丢掉 size，于是是 0×0），
+  此后只由每帧 layer tree 里的 `PlatformViewLayer` 驱动摆放、裁剪和显示；
+- 旧通道 `flutter/platform_views` 上的 `resize` / `offset` 落到纹理控制器，
+  对 HCPP 视图无效（`resize` 还会抛异常）；
+- 层级变成 Flutter 主表面（底）< 平台视图 < overlay 表面（顶）：画在视频之上的
+  Flutter 内容进 overlay，画在视频之下的内容被视频盖住。
+
+旧的 `OhosPlatformVideo` 什么都不画、靠手动 `resize` / `offset` 定位，于是在 HCPP
+下 XComponent 一直是 0×0 且透明，拿不到 surface，mpv 也就拿不到 `wid`——表现为
+全屏 HDR 黑屏、有声音。现在它用 `OhosViewSurface` 把视图放进 layer tree，几何全部
+交给引擎；`MediaKitVideoPlatformView.ets` 的 XComponent 在 `onTouch` /
+`onAxisEvent` 里调用引擎注入的 `touchDispatcher` / `axisDispatcher`，把落在视频上的
+输入交回 Flutter（引擎只注入、不调用，必须由插件自己转发）。回归测试见
+`test/plugin/pl_player/ohos_platform_video_test.dart`。
+
+下一节的 `xComponentColor`、`PlatformVideoBackdrop` 和全屏 Scaffold 透明等处理
+针对的是旧层级（视频在 Flutter 之下）。HCPP 下视频在 Flutter 主表面之上，这些
+透明化不再是必需的；暂时保留（黑边仍透出涂黑的根 Stack），是否移除等真机验证后再定。
+
 ### XComponent 的不透明黑底会盖住平台视图（黑屏根因）
 
 平台视图接上了、尺寸也对了，视频区域**仍然全黑**，SDR 正常——这是第三个坑，
@@ -585,12 +615,14 @@ target-peak 只是让它按 PQ 的名义峰值 10000 nit 反推目标，等于�
   可通过 `--vo` 切换验证。
 - 平台视图的合成开销高于纹理，且不能被 Flutter 任意变换，
   所以只在 HDR 片源上启用，SDR 仍走纹理路径。
-- **平台视图渲染在 Flutter 画面之下**（见引擎补丁 README 里的 `Stack` 层级）。
-  好处是播放器控件天然叠在视频上方，代价是视频区域 Flutter 必须画透明：
-  `OhosPlatformVideo` 本身不绘制任何内容，`Video(fill:)` 在该模式下被置为
-  `Colors.transparent`。如果外层还有不透明背景盖住播放区，视频会看不见。
-- 平台视图不参与 Flutter 命中测试（`hitTestSelf` 恒为 false），手势仍由
-  播放器自己的 Flutter 层处理；视频表面上不需要原生触摸。
+- **平台视图叠在 Flutter 主表面之上**（3.44.9 的 HCPP 层级）。画在视频之上的
+  Flutter 内容（控件、弹幕、字幕）由引擎放进 overlay 表面，仍显示在视频上方；
+  画在视频之下的内容会被视频盖住。（3.41.9 + 引擎补丁时是反过来的：视频在
+  Flutter 之下，视频区域 Flutter 必须画透明。）
+- 平台视图不参与 Flutter 命中测试（`PlatformViewHitTestBehavior.transparent`，
+  没有手势识别器），手势仍由播放器自己的 Flutter 层处理。落在视频上的原生
+  触摸 / 滚轮由 XComponent 转交回 Flutter；**不按键的鼠标悬停不会转交**（引擎
+  没给平台视图提供 hover 分发），2in1 上鼠标停在视频空白处时控件可能不会随悬停出现。
 - **平台视图模式下「左右翻转 / 上下翻转」不可用**，因为它们是 Flutter 侧的
   `Transform.flip`（绘制期变换），而这一模式下视频根本不由 Flutter 绘制。
   与其留一个点了没反应的开关，播放设置里在该模式下直接不显示这两项。
