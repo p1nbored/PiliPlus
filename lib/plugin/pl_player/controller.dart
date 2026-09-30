@@ -34,6 +34,7 @@ import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/platform_video_backdrop.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/player_rebuild_queue.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
@@ -93,6 +94,15 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         isAlive: () => _playerCount > 0,
       );
 
+  /// setDataSource 与渲染路径重建共用的串行队列，见 [PlayerRebuildQueue]。
+  late final PlayerRebuildQueue _playerQueue = PlayerRebuildQueue(
+    hasPlayer: () => _videoPlayerController != null,
+    isStale: () =>
+        _usesPlatformView != usePlatformView || _appliedHdrMode != ohosHdrMode,
+    rebuild: _rebuildForRenderPath,
+    onError: _onRenderPathRebuildFailed,
+  );
+
   /// 渲染路径重建**完成**后自增（新播放器已经 open 好）。
   ///
   /// 与 [playerGeneration] 的区别很重要：[playerGeneration] 在 VideoController
@@ -100,7 +110,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 调用；这时候去设字幕轨之类的东西会被随后的 loadfile 丢掉。页面级、需要
   /// 播放器真正就绪的重挂逻辑要订阅这一个。
   ///
-  /// 只在 [_syncRenderPath] 里自增——正常的 setDataSource 流程有 onInit 收口，
+  /// 只在 [_rebuildForRenderPath] 里自增——正常的 setDataSource 流程有 onInit 收口，
   /// 不需要也不应该重复触发。
   final RxInt playerRebuilt = 0.obs;
 
@@ -879,16 +889,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     // 当前片源画质，用于判断是否需要按 HDR 输出
     VideoQuality? quality,
   }) {
-    final previous = _setDataSourceQueue;
-    final run = () async {
-      if (previous != null) {
-        try {
-          await previous;
-        } catch (_) {
-          // 前一个初始化失败不阻塞本次
-        }
-      }
-      await _setDataSource(
+    return _playerQueue.run(
+      () => _setDataSource(
         dataSource,
         isLive: isLive,
         autoplay: autoplay,
@@ -909,14 +911,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         volume: volume,
         autoFullScreenFlag: autoFullScreenFlag,
         quality: quality,
-      );
-    }();
-    _setDataSourceQueue = run;
-    return run;
+      ),
+    );
   }
-
-  /// setDataSource 串行队列尾；同一时刻仅一个初始化流程在执行
-  Future<void>? _setDataSourceQueue;
 
   Future<void> _setDataSource(
     DataSource dataSource, {
@@ -1955,6 +1952,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   double screenRatio = 0.0;
   bool isManualFS = true;
+
   /// 最近一次退出全屏的时间。鸿蒙部分机型开启旋转锁定后，会被 childWhenDisabled 的窗口变
   /// 横屏自动进全屏立即拉回，表现为退不出全屏。用该时间戳抑制退出后短暂窗口内的自动进全屏。
   ///
@@ -2079,15 +2077,20 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
   }
 
-  /// 渲染路径（平台视图 / 纹理）或 HDR 信令变化时重建播放器，
-  /// 保留进度、播放状态与倍速。
+  /// 渲染路径（平台视图 / 纹理）或 HDR 信令变化时重建播放器。
+  ///
+  /// 与 setDataSource 排在同一条队列里，是否真要重建到了队头才判断，
+  /// 见 [PlayerRebuildQueue]。
   Future<void> _syncRenderPath() async {
     if (!_isOhos) return;
-    if (_videoPlayerController == null) return;
-    if (_usesPlatformView == usePlatformView &&
-        _appliedHdrMode == ohosHdrMode) {
-      return;
-    }
+    await _playerQueue.requestRebuild();
+  }
+
+  /// 按当前渲染路径重建播放器，保留进度、播放状态与倍速。
+  /// 只由 [_playerQueue] 调用，失败向上抛，由它记下待重试。
+  Future<void> _rebuildForRenderPath() async {
+    // 上一次重建失败后，重试可能落在页面已经销毁之后
+    if (_playerCount == 0) return;
     final wasPlaying = playerStatus.isPlaying;
     // 不能只信 state.position：open() 会把它清零，全屏切换恰好落在「新播放器
     // 刚建好、mpv 还没上报 time-pos」的窗口里时读到的就是 0，一重建就从头播，
@@ -2096,26 +2099,30 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     final pos = live > 0
         ? Duration(milliseconds: live)
         : Duration(seconds: position.value);
-    try {
-      await _createVideoController(dataSource, pos, null);
-      if (_videoPlayerController == null) return;
-      // 重建出来的是一个全新的 Player，倍速回到了默认值 1.0，而 UI 上的
-      // _playbackSpeed 没变——不重新应用就会「显示 2.0x，实际 1.0x」。
-      // 注意不要直接调 _initializePlayer()：它带 _autoPlay 分支，会把用户
-      // 手动暂停的视频重新播起来。
-      if (!isLive &&
-          _videoPlayerController!.state.rate != _playbackSpeed.value) {
-        await setPlaybackSpeed(_playbackSpeed.value);
-      }
-      if (wasPlaying) {
-        await play();
-      }
-      // 到这里新播放器已经 open 完毕，页面才能安全地重挂字幕轨、
-      // SponsorBlock 这些绑在 Player 上的东西。见 [playerRebuilt]。
-      playerRebuilt.value++;
-    } catch (e) {
-      debugPrint('_syncRenderPath failed: $e');
+    await _createVideoController(dataSource, pos, null);
+    if (_videoPlayerController == null) return;
+    // 重建出来的是一个全新的 Player，倍速回到了默认值 1.0，而 UI 上的
+    // _playbackSpeed 没变——不重新应用就会「显示 2.0x，实际 1.0x」。
+    // 注意不要直接调 _initializePlayer()：它带 _autoPlay 分支，会把用户
+    // 手动暂停的视频重新播起来。
+    if (!isLive && _videoPlayerController!.state.rate != _playbackSpeed.value) {
+      await setPlaybackSpeed(_playbackSpeed.value);
     }
+    if (wasPlaying) {
+      await play();
+    }
+    // 到这里新播放器已经 open 完毕，页面才能安全地重挂字幕轨、
+    // SponsorBlock 这些绑在 Player 上的东西。见 [playerRebuilt]。
+    playerRebuilt.value++;
+  }
+
+  void _onRenderPathRebuildFailed(Object error, StackTrace stackTrace) {
+    if (kDebugMode) {
+      debugPrint(stackTrace.toString());
+      debugPrint('_rebuildForRenderPath failed: $error');
+    }
+    // 旧播放器多半已经 dispose，画面是黑的；下一次进出全屏会重试。
+    SmartDialog.showToast('切换播放画面失败，进出全屏可重试');
   }
 
   /// 等待平台视口旋转为横屏（宽>高），带超时兜底。
@@ -2269,7 +2276,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
     _playerCount = 0;
     // 必须紧跟 _playerCount 清零、在第一个 await 之前：此后迟到的
-    // _syncRenderPath 因 _playerCount == 0 不会再发 true，这里的 false 就是最终值。
+    // 渲染路径重建因 _playerCount == 0 不会再发 true，这里的 false 就是最终值。
     _platformVideoBackdrop.reset();
     if (removeSafeArea) {
       showSystemBar();

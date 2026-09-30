@@ -375,7 +375,7 @@ class VideoDetailController extends GetxController
     // 订阅的是 playerRebuilt 而不是 playerGeneration：后者在 VideoController
     // 刚被替换时就自增，那时 `player.open()` 还没调用，这时候设的字幕轨会被
     // 随后的 loadfile 丢掉。playerRebuilt 只在重建**完成**后自增，且只由
-    // _syncRenderPath 触发——正常 setDataSource 有 onInit 收口，不会重复。
+    // 渲染路径重建（_rebuildForRenderPath）触发——正常 setDataSource 有 onInit 收口，不会重复。
     if (OS.isHarmony) {
       _renderPathWorker = ever(plPlayerController.playerRebuilt, (_) {
         if (isClosed) return;
