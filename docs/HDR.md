@@ -394,11 +394,14 @@ NativeWindow output switched to BT.2020 PQ     # HDR10 / 杜比视界
 NativeWindow output switched to BT.2020 HLG    # HLG
 ```
 
-如果看到的是 `Failed to set NativeWindow color space: <err>` 或
+内嵌播放和画中画走纹理路径，这时会发 `--ohos-hdr-mode=no`，由 mpv 自己
+色调映射到 SDR（Flutter 会把纹理当 sRGB 采样，PQ 画面在这里只会泛白），
+日志应是 `NativeWindow output switched to sRGB`。请先进全屏再看日志。
+
+全屏下看到 `Failed to set NativeWindow color space: <err>` 或
 `Failed to set NativeWindow HDR metadata type`，说明 surface 不接受 HDR
-属性——通常意味着仍然走在纹理路径上。**内嵌播放时这是预期行为**（平台视图只在
-全屏启用），请先进全屏再看日志；全屏下仍然如此才说明有问题，此时确认
-「启用 HDR 视频」已开启、且面板确实支持 HDR（见下方 `getDisplayHdrFormats`）。
+属性，此时确认「启用 HDR 视频」已开启、且面板确实支持 HDR（见下方
+`getDisplayHdrFormats`）。
 
 **验证前缀 SEI 补丁是否生效（动态元数据）**：`ohos-hdr-mode` / `ohcodec_embed`
 两个字符串只能证明「这是打过补丁的 libmpv」，证明不了 `ohdec.c` 的 SEI 补丁在里面

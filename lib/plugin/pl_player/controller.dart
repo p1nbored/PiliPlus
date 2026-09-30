@@ -29,6 +29,7 @@ import 'package:PiliPlus/plugin/pl_player/models/double_tap_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/duration.dart';
 import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
 import 'package:PiliPlus/plugin/pl_player/models/heart_beat_type.dart';
+import 'package:PiliPlus/plugin/pl_player/models/ohos_hdr_output.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_repeat.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
@@ -522,67 +523,28 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   /// 它随 VideoController 的配置一起下发，只在创建播放器时读取：改了设置从
   /// 下一次重建播放器（重新打开视频，或 HDR 片源进出全屏）起生效。
   ///
-  /// 只在面板确实支持 HDR 时才会用上（见 [_isHDRPlayback]）。标偏的代价是
-  /// 高光被压得多一点或少一点，不会不出画；而不给这个值的代价大得多——
-  /// libplacebo 会按 PQ 的名义峰值 10000 nit 反推，等于假设了一块亮 6 倍的屏。
-  static double get _displayPeakNits => Pref.hdrPeakNits.toDouble();
+  /// 只在平台视图输出 HDR 时才会用上，规则见 [OhosHdrOutput.targetPeak]。
+  static int get _displayPeakNits => Pref.hdrPeakNits;
 
-  /// 传给 mpv 的 `--ohos-hdr-mode`，决定向鸿蒙上报哪种 HDR 类型。
-  ///
-  /// 只影响**信令**，不影响画面：`vo=gpu-next` 下 libplacebo 一定会跑一遍完整
-  /// 渲染，没有任何「直通」路径（`vo_ohcodec_embed` 更不行，它连 set_color /
-  /// set_frame 都不调，色域和元数据一个都不设）。
-  ///
-  /// - 原生 HDR Vivid：`vivid`。**不能用 `auto`**——auto 要靠 ohos_common.c 从帧
-  ///   的 CUVA side data 认出片源，但默认走的是鸿蒙硬解（hwdec=auto 会选中
-  ///   ohcodec），`ff_hevc_oh_decoder` 根本不解析 SEI，Vivid side data 永远不会
-  ///   产生，auto 于是一路落到 hdr10——原生 Vivid 反而被报成 HDR10。片源类型从
-  ///   qn 就已经知道，直接指定即可。
-  /// - 杜比视界：鸿蒙没有 DV 信令（SDK 26 的 OH_NativeBuffer_MetadataType 里也
-  ///   没有 DV 这个值）。libplacebo 应用 RPU 后画面已经是成品 PQ，按 Vivid 上报
-  ///   只是借个标签让面板拉峰值亮度——**画面仍然是杜比视界**，没有转成 Vivid，
-  ///   也不会被合成器按 Vivid 二次处理（我们从不写 OH_HDR_DYNAMIC_METADATA，
-  ///   没有 CUVA 载荷可供误用）。面板不支持 Vivid 时退回 hdr10。
-  /// - HDR10 / HDR10+：**如实上报 hdr10**。曾经试过按 Vivid 上报，但 Vivid 这个
-  ///   类型意味着背后有 CUVA 载荷，而 HDR10+ 是 ST 2094-40，两者没有转换关系，
-  ///   贴错标签只会让合成器要么丢弃要么误解析。
-  String? get ohosHdrMode {
-    if (!_isOhos) {
-      return null;
-    }
-    final quality = _hdrQuality;
-    if (quality == null || !quality.isHDR) {
-      return null;
-    }
-    // 片源是 HDR，但用户把开关关了 / 面板明确不支持：必须显式发 `no`，
-    // **不能**返回 null。null 会让 media_kit 整个省掉这个属性，mpv 于是落回
-    // 自己的默认值 `auto`，而 auto 在 HDR 片源上照样进 HDR——「关闭」等于没关。
-    // （`no` 即 OHOS_HDR_MODE_OFF，ohos_common.c 用它关掉 allow_hdr。）
-    if (!_isHDRPlayback) {
-      return 'no';
-    }
-    if (quality.isHDRVivid) {
-      // 原生 Vivid：片源自己带 CUVA，本来就该按 Vivid 上报。面板能力**未知**
-      // 时按支持处理，跟 [_isHDRPlayback] 一个口径——一次查询失败不该把原生
-      // Vivid 静默降级成 hdr10。只有明确查到不支持才退。
-      return HarmonyChannel.displayMaySupportHdrVivid ? 'vivid' : 'hdr10';
-    }
-    if (quality.isDolbyVision) {
-      // 杜比视界只是**借** Vivid 这个标签让面板拉峰值亮度，自己并没有 CUVA
-      // 载荷。所以这里反过来取保守口径：没有确证支持就老实上报 hdr10。
-      // 两者都是 PQ，差别只在标签，退回去不损失画质。
-      return HarmonyChannel.displaySupportsHdrVivid ? 'vivid' : 'hdr10';
-    }
-    return 'hdr10';
-  }
+  /// 传给 mpv 的 `--ohos-hdr-mode`，规则见 [OhosHdrOutput.mode]。
+  String? get ohosHdrMode => _isOhos
+      ? OhosHdrOutput.mode(
+          quality: _hdrQuality,
+          hdrPlayback: _isHDRPlayback,
+          platformView: usePlatformView,
+          displayMaySupportVivid: HarmonyChannel.displayMaySupportHdrVivid,
+          displaySupportsVivid: HarmonyChannel.displaySupportsHdrVivid,
+        )
+      : null;
 
-  /// 传给 mpv 的 `--target-peak`（面板峰值亮度，nit）。
-  ///
-  /// 所有 HDR 片源都要给。`gpu-next` 一定会做色调映射，不给的话 libplacebo 就
-  /// 按输出色彩空间反推目标峰值——PQ 的名义峰值是 10000 nit，等于假设了一块比
-  /// 实际亮 6 倍多的屏幕，高光会被无谓地压暗。
-  double? get ohosHdrTargetPeak =>
-      _isOhos && _isHDRPlayback ? _displayPeakNits : null;
+  /// 传给 mpv 的 `--target-peak`，规则见 [OhosHdrOutput.targetPeak]。
+  double? get ohosHdrTargetPeak => _isOhos
+      ? OhosHdrOutput.targetPeak(
+          hdrPlayback: _isHDRPlayback,
+          platformView: usePlatformView,
+          peakNits: _displayPeakNits,
+        )
+      : null;
 
   late final progressType = Pref.btmProgressBehavior;
   late final enableQuickDouble = Pref.enableQuickDouble;
